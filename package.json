@@ -1,0 +1,23 @@
+{
+  "name": "com.sst-systems.stableref",
+  "version": "1.0.1",
+  "displayName": "StableRef",
+  "description": "Serializable polymorphic reference wrapper built on [SerializeReference] that survives class renames. Stores a stable string type ID alongside the object. Includes editor tools: searchable type selector, find-usages window, and missing-types report.",
+  "unity": "2021.3",
+  "author": {
+    "name": "SST Systems",
+    "email": "egor.schesterikov@mail.ru",
+    "url": "https://github.com/SST-Systems"
+  },
+  "keywords": [
+    "serialize-reference",
+    "polymorphic",
+    "rename-safe",
+    "inspector",
+    "stable-id"
+  ],
+  "documentationUrl": "https://github.com/SST-Systems/StableRef/blob/main/README.md",
+  "changelogUrl": "https://github.com/SST-Systems/StableRef/releases",
+  "licensesUrl": "https://github.com/SST-Systems/StableRef/blob/main/LICENSE.md",
+  "dependencies": {}
+}
