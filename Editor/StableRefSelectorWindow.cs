@@ -47,6 +47,7 @@ namespace SST.StableRef
         private int _hoveredIndex = -1;
         private Vector2 _scroll;
         private bool _doFocusSearch = true;
+        private int _focusFrames;
         private float _contentH;
         private float _contentW;
         private Rect _anchorScreen;
@@ -191,11 +192,10 @@ namespace SST.StableRef
 
             if (_doFocusSearch && Event.current.type == EventType.Repaint)
             {
-                _doFocusSearch = false;
-                EditorApplication.delayCall += () =>
-                {
-                    if (this && focusedWindow == this) GUI.FocusControl("StableRefSearch");
-                };
+                EditorGUI.FocusTextInControl("StableRefSearch");
+                if (GUI.GetNameOfFocusedControl() == "StableRefSearch" || ++_focusFrames > 8)
+                    _doFocusSearch = false;
+                Repaint();
             }
         }
 

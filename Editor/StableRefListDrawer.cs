@@ -131,25 +131,42 @@ namespace SST.StableRef
 
             rl.onAddCallback = list =>
             {
-                var arr = list.serializedProperty;
-                arr.InsertArrayElementAtIndex(arr.arraySize);
-                var elem = arr.GetArrayElementAtIndex(arr.arraySize - 1);
+                var arrayProp = list.serializedProperty;
+                var so = arrayProp.serializedObject;
+                string path = arrayProp.propertyPath;
 
-                var valueProp = elem.FindPropertyRelative("Value");
-                if (valueProp != null) valueProp.managedReferenceValue = null;
-                var typeId = elem.FindPropertyRelative("TypeId");
-                if (typeId != null) typeId.stringValue = string.Empty;
-                var dispName = elem.FindPropertyRelative("TypeDisplayName");
-                if (dispName != null) dispName.stringValue = string.Empty;
-                elem.FindPropertyRelative("ObjectRefs")?.ClearArray();
-                elem.FindPropertyRelative("ObjectRefPaths")?.ClearArray();
-                var valData = elem.FindPropertyRelative("ValuesData");
-                if (valData != null) valData.stringValue = string.Empty;
+                foreach (var target in so.targetObjects)
+                {
+                    var targetSo = new SerializedObject(target);
+                    targetSo.Update();
+                    var arr = targetSo.FindProperty(path);
+                    if (arr == null) continue;
 
-                arr.serializedObject.ApplyModifiedProperties();
+                    arr.InsertArrayElementAtIndex(arr.arraySize);
+                    ResetElement(arr.GetArrayElementAtIndex(arr.arraySize - 1));
+
+                    targetSo.ApplyModifiedProperties();
+                }
+
+                so.Update();
+                list.index = arrayProp.arraySize - 1;
             };
 
             return rl;
+        }
+
+        private static void ResetElement(SerializedProperty elem)
+        {
+            var valueProp = elem.FindPropertyRelative("Value");
+            if (valueProp != null) valueProp.managedReferenceValue = null;
+            var typeId = elem.FindPropertyRelative("TypeId");
+            if (typeId != null) typeId.stringValue = string.Empty;
+            var dispName = elem.FindPropertyRelative("TypeDisplayName");
+            if (dispName != null) dispName.stringValue = string.Empty;
+            elem.FindPropertyRelative("ObjectRefs")?.ClearArray();
+            elem.FindPropertyRelative("ObjectRefPaths")?.ClearArray();
+            var valData = elem.FindPropertyRelative("ValuesData");
+            if (valData != null) valData.stringValue = string.Empty;
         }
 
         private static bool HasBrokenRefs(SerializedProperty itemsProp)

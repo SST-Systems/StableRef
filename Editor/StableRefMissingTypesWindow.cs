@@ -328,6 +328,8 @@ namespace SST.StableRef
             public string AssetPath;
             public bool IsSceneObject;
             public List<MissingRefInfo> MissingRefs;
+            public string TypeName;
+            public List<string> GoNameChain;
         }
 
         private readonly List<ScanEntry> _scanEntries = new();
@@ -420,13 +422,24 @@ namespace SST.StableRef
             var missingRefs = CollectMissingRefs(target);
             if (missingRefs.Count == 0) return;
 
+            List<string> goChain = null;
+            if (target is Component comp)
+            {
+                goChain = new List<string>();
+                for (var t = comp.transform; t != null; t = t.parent)
+                    goChain.Add(t.gameObject.name);
+                goChain.Reverse();
+            }
+
             _scanEntries.Add(new ScanEntry
             {
                 Target = target,
                 ObjectId = objectId,
                 AssetPath = assetPath,
                 IsSceneObject = isScene,
-                MissingRefs = missingRefs
+                MissingRefs = missingRefs,
+                TypeName = target.GetType().Name,
+                GoNameChain = goChain
             });
         }
 
@@ -493,10 +506,12 @@ namespace SST.StableRef
                 Node targetGroup;
                 if (isScene)
                     targetGroup = sceneGroup;
-                else if (firstEntry.Target is ScriptableObject)
+                else if (firstEntry.GoNameChain == null)
                     targetGroup = soGroup;
                 else
                     targetGroup = prefabGroup;
+
+                var assetObject = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(assetPath);
 
                 var assetNode = new Node
                 {
@@ -505,30 +520,34 @@ namespace SST.StableRef
                     Icon = isScene
                         ? EditorGUIUtility.IconContent("d_SceneAsset Icon").image
                         : AssetDatabase.GetCachedIcon(assetPath),
-                    PingTarget = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(assetPath),
+                    PingTarget = assetObject,
                     AssetPath = assetPath
                 };
 
                 foreach (var entry in assetGroup)
                 {
-                    if (entry.Target is ScriptableObject so)
+                    if (entry.GoNameChain == null)
                     {
                         var compNode = new Node
                         {
                             Kind = NodeKind.Component,
-                            Label = so.GetType().Name,
+                            Label = entry.TypeName,
                             Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
-                            PingTarget = so,
+                            PingTarget = entry.Target,
                             ObjectId = entry.ObjectId,
                             AssetPath = assetPath,
                             IsSceneObject = false
                         };
-                        AddMissingRefNodes(compNode, entry.MissingRefs, so);
+                        AddMissingRefNodes(compNode, entry.MissingRefs, entry.Target);
                         assetNode.Children.Add(compNode);
                     }
-                    else if (entry.Target is Component comp)
+                    else if (entry.IsSceneObject)
                     {
-                        InsertComponentIntoHierarchy(assetNode, comp, entry, assetPath);
+                        InsertSceneComponentIntoHierarchy(assetNode, entry, assetPath, assetObject);
+                    }
+                    else
+                    {
+                        InsertComponentIntoHierarchy(assetNode, (Component)entry.Target, entry, assetPath);
                     }
                 }
 
@@ -613,6 +632,45 @@ namespace SST.StableRef
                 IsSceneObject = entry.IsSceneObject
             };
             AddMissingRefNodes(compNode, entry.MissingRefs, comp);
+            current.Children.Add(compNode);
+        }
+
+        private static void InsertSceneComponentIntoHierarchy(
+            Node assetNode, ScanEntry entry, string assetPath, UnityEngine.Object sceneAsset)
+        {
+            Node current = assetNode;
+            var chain = entry.GoNameChain;
+            for (int i = 0; i < chain.Count; i++)
+            {
+                string goName = chain[i];
+                var existing = current.Children.FirstOrDefault(
+                    n => n.Kind == NodeKind.GameObject && n.Label == goName);
+
+                if (existing == null)
+                {
+                    existing = new Node
+                    {
+                        Kind = NodeKind.GameObject,
+                        Label = goName,
+                        Icon = StableRefEditorUtility.GoIcon,
+                        PingTarget = sceneAsset
+                    };
+                    current.Children.Add(existing);
+                }
+                current = existing;
+            }
+
+            var compNode = new Node
+            {
+                Kind = NodeKind.Component,
+                Label = entry.TypeName,
+                Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
+                PingTarget = sceneAsset,
+                ObjectId = entry.ObjectId,
+                AssetPath = assetPath,
+                IsSceneObject = true
+            };
+            AddMissingRefNodes(compNode, entry.MissingRefs, sceneAsset);
             current.Children.Add(compNode);
         }
 

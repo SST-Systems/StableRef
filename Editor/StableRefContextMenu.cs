@@ -190,8 +190,7 @@ namespace SST.StableRef
                     dstIter.objectReferenceValue = srcIter.objectReferenceValue;
 
                 bool enter = srcIter.hasChildren
-                          && srcIter.propertyType != SerializedPropertyType.ObjectReference
-                          && srcIter.propertyType != SerializedPropertyType.ManagedReference;
+                          && srcIter.propertyType != SerializedPropertyType.ObjectReference;
 
                 hasSrc = srcIter.Next(enter);
                 hasDst = dstIter.Next(enter);
@@ -334,8 +333,7 @@ namespace SST.StableRef
                 }
 
                 bool enter = iter.hasChildren
-                          && iter.propertyType != SerializedPropertyType.ObjectReference
-                          && iter.propertyType != SerializedPropertyType.ManagedReference;
+                          && iter.propertyType != SerializedPropertyType.ObjectReference;
                 hasProp = iter.Next(enter);
             }
 
