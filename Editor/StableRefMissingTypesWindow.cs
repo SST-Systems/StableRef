@@ -330,6 +330,8 @@ namespace SST.StableRef
             public List<MissingRefInfo> MissingRefs;
             public string TypeName;
             public List<string> GoNameChain;
+            public bool SceneLoaded;
+            public string SceneName;
         }
 
         private readonly List<ScanEntry> _scanEntries = new();
@@ -372,12 +374,16 @@ namespace SST.StableRef
                     }
                 }
 
+                var scenePaths = new HashSet<string>();
                 foreach (var guid in sceneGuids)
                 {
                     var path = AssetDatabase.GUIDToAssetPath(guid);
                     EditorUtility.DisplayProgressBar("Scanning scenes…", path, (float)idx++ / total);
+                    scenePaths.Add(path);
                     ScanScenePath(path);
                 }
+
+                ScanOpenScenes(scenePaths);
             }
             finally { EditorUtility.ClearProgressBar(); }
 
@@ -403,7 +409,8 @@ namespace SST.StableRef
             {
                 foreach (var root in scene.GetRootGameObjects())
                 foreach (var comp in root.GetComponentsInChildren<Component>(true))
-                    if (comp != null) CollectMissing(comp, scenePath, isScene: true);
+                    if (comp != null)
+                        CollectMissing(comp, scenePath, isScene: true, sceneLoaded: wasLoaded, sceneName: scene.name);
             }
             finally
             {
@@ -411,7 +418,23 @@ namespace SST.StableRef
             }
         }
 
-        private void CollectMissing(UnityEngine.Object target, string assetPath, bool isScene)
+        private void ScanOpenScenes(HashSet<string> alreadyScanned)
+        {
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                var scene = SceneManager.GetSceneAt(i);
+                if (!scene.isLoaded) continue;
+                if (!string.IsNullOrEmpty(scene.path) && alreadyScanned.Contains(scene.path)) continue;
+
+                foreach (var root in scene.GetRootGameObjects())
+                foreach (var comp in root.GetComponentsInChildren<Component>(true))
+                    if (comp != null)
+                        CollectMissing(comp, scene.path, isScene: true, sceneLoaded: true, sceneName: scene.name);
+            }
+        }
+
+        private void CollectMissing(UnityEngine.Object target, string assetPath, bool isScene,
+            bool sceneLoaded = false, string sceneName = null)
         {
             if (target is not MonoBehaviour && target is not ScriptableObject) return;
             if (!SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
@@ -439,7 +462,9 @@ namespace SST.StableRef
                 IsSceneObject = isScene,
                 MissingRefs = missingRefs,
                 TypeName = target.GetType().Name,
-                GoNameChain = goChain
+                GoNameChain = goChain,
+                SceneLoaded = sceneLoaded,
+                SceneName = sceneName
             });
         }
 
@@ -516,7 +541,9 @@ namespace SST.StableRef
                 var assetNode = new Node
                 {
                     Kind = NodeKind.Asset,
-                    Label = System.IO.Path.GetFileNameWithoutExtension(assetPath),
+                    Label = string.IsNullOrEmpty(assetPath)
+                        ? (string.IsNullOrEmpty(firstEntry.SceneName) ? "Untitled" : firstEntry.SceneName)
+                        : System.IO.Path.GetFileNameWithoutExtension(assetPath),
                     Icon = isScene
                         ? EditorGUIUtility.IconContent("d_SceneAsset Icon").image
                         : AssetDatabase.GetCachedIcon(assetPath),
@@ -541,13 +568,14 @@ namespace SST.StableRef
                         AddMissingRefNodes(compNode, entry.MissingRefs, entry.Target);
                         assetNode.Children.Add(compNode);
                     }
-                    else if (entry.IsSceneObject)
-                    {
-                        InsertSceneComponentIntoHierarchy(assetNode, entry, assetPath, assetObject);
-                    }
                     else
                     {
-                        InsertComponentIntoHierarchy(assetNode, (Component)entry.Target, entry, assetPath);
+                        bool liveTarget = !entry.IsSceneObject
+                                          || (entry.SceneLoaded && entry.Target != null);
+                        if (liveTarget)
+                            InsertComponentIntoHierarchy(assetNode, (Component)entry.Target, entry, assetPath);
+                        else
+                            InsertSceneComponentIntoHierarchy(assetNode, entry, assetPath, assetObject);
                     }
                 }
 

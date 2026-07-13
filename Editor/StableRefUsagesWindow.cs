@@ -30,6 +30,7 @@ namespace SST.StableRef
             public UnityEngine.Object PingTarget;
             public string PrefabAssetPath;
             public string TransformPath;
+            public string ScenePath;
             public readonly List<Node> Children = new();
             public bool Expanded = true;
         }
@@ -189,6 +190,14 @@ namespace SST.StableRef
 
         private bool ComputeVisible(Node node)
         {
+            if (node.Kind == NodeKind.Group)
+            {
+                foreach (var c in node.Children)
+                    ComputeVisible(c);
+                _visibleNodes.Add(node);
+                return true;
+            }
+
             bool vis;
             if (node.Children.Count > 0)
             {
@@ -215,7 +224,21 @@ namespace SST.StableRef
                 case NodeKind.Group:
                     EditorGUI.indentLevel = 0;
                     node.Expanded = DrawFoldout(node, node.Expanded, node.Label, null, StableRefEditorUtility.HeaderStyle);
-                    if (node.Expanded) DrawVisibleChildren(node.Children, depth + 1);
+                    if (node.Expanded)
+                    {
+                        bool anyChildVisible = false;
+                        foreach (var c in node.Children)
+                            if (IsVisible(c)) { anyChildVisible = true; break; }
+
+                        if (anyChildVisible)
+                            DrawVisibleChildren(node.Children, depth + 1);
+                        else
+                        {
+                            EditorGUI.indentLevel = 1;
+                            using (new EditorGUI.DisabledScope(true))
+                                EditorGUILayout.LabelField(node.Children.Count == 0 ? "No usages found" : "No matches");
+                        }
+                    }
                     return;
 
                 case NodeKind.Asset:
@@ -361,9 +384,9 @@ namespace SST.StableRef
             }
             finally { EditorUtility.ClearProgressBar(); }
 
-            if (prefabGroup.Children.Count > 0) _roots.Add(prefabGroup);
-            if (sceneGroup.Children.Count > 0) _roots.Add(sceneGroup);
-            if (soGroup.Children.Count > 0) _roots.Add(soGroup);
+            _roots.Add(prefabGroup);
+            _roots.Add(sceneGroup);
+            _roots.Add(soGroup);
 
             CollectAvailableTypes();
             InvalidateVisibility();
@@ -395,19 +418,76 @@ namespace SST.StableRef
 
         private static void ScanScenes(Node group)
         {
-            EditorUtility.DisplayProgressBar("StableRef Usages", "Scanning scenes...", 0.75f);
+            var scanned = new HashSet<string>();
+
+            var sceneGuids = AssetDatabase.FindAssets("t:Scene", new[] { "Assets" });
+            for (int i = 0; i < sceneGuids.Length; i++)
+            {
+                var scenePath = AssetDatabase.GUIDToAssetPath(sceneGuids[i]);
+                EditorUtility.DisplayProgressBar("StableRef Usages",
+                    $"Scenes ({i + 1} / {sceneGuids.Length})", 0.7f + 0.1f * i / sceneGuids.Length);
+
+                var existingScene = SceneManager.GetSceneByPath(scenePath);
+                bool wasLoaded = existingScene.IsValid() && existingScene.isLoaded;
+
+                UnityEngine.SceneManagement.Scene scene;
+                if (wasLoaded)
+                    scene = existingScene;
+                else
+                {
+                    try { scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive); }
+                    catch { continue; }
+                }
+
+                scanned.Add(scenePath);
+
+                var sceneAsset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(scenePath);
+
+                var sceneNode = new Node
+                {
+                    Kind = NodeKind.Asset,
+                    Label = Path.GetFileNameWithoutExtension(scenePath),
+                    Icon = EditorGUIUtility.IconContent("d_SceneAsset Icon").image,
+                    PingTarget = sceneAsset
+                };
+
+                try
+                {
+                    foreach (var root in scene.GetRootGameObjects())
+                        ScanGameObjectTree(root, sceneNode, null, "", sceneAsset);
+                }
+                finally
+                {
+                    if (!wasLoaded) EditorSceneManager.CloseScene(scene, removeScene: true);
+                }
+
+                TagScenePath(sceneNode, scenePath);
+                if (sceneNode.Children.Count > 0) group.Children.Add(sceneNode);
+            }
+
             for (int i = 0; i < SceneManager.sceneCount; i++)
             {
                 var scene = SceneManager.GetSceneAt(i);
                 if (!scene.isLoaded) continue;
+                if (!string.IsNullOrEmpty(scene.path) && scanned.Contains(scene.path)) continue;
+
+                bool hasPath = !string.IsNullOrEmpty(scene.path);
+                var sceneAsset = hasPath
+                    ? AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(scene.path)
+                    : null;
+
+                var pingOverride = hasPath ? sceneAsset : null;
 
                 var sceneNode = new Node
                 {
-                    Kind = NodeKind.Asset, Label = scene.name,
-                    Icon = EditorGUIUtility.IconContent("d_SceneAsset Icon").image
+                    Kind = NodeKind.Asset,
+                    Label = string.IsNullOrEmpty(scene.name) ? "Untitled" : scene.name,
+                    Icon = EditorGUIUtility.IconContent("d_SceneAsset Icon").image,
+                    PingTarget = sceneAsset
                 };
                 foreach (var root in scene.GetRootGameObjects())
-                    ScanGameObjectTree(root, sceneNode, null);
+                    ScanGameObjectTree(root, sceneNode, null, "", pingOverride);
+                if (hasPath) TagScenePath(sceneNode, scene.path);
                 if (sceneNode.Children.Count > 0) group.Children.Add(sceneNode);
             }
         }
@@ -460,7 +540,8 @@ namespace SST.StableRef
         }
 
         private static void ScanGameObjectTree(
-            GameObject go, Node parentNode, GameObject prefabRoot, string parentPath = "")
+            GameObject go, Node parentNode, GameObject prefabRoot, string parentPath = "",
+            UnityEngine.Object pingOverride = null)
         {
             bool isRoot = prefabRoot != null && go == prefabRoot;
             string prefabPath = prefabRoot != null ? AssetDatabase.GetAssetPath(prefabRoot) : null;
@@ -476,7 +557,7 @@ namespace SST.StableRef
                     Kind = NodeKind.GameObject,
                     Label = go.name,
                     Icon = StableRefEditorUtility.GoIcon,
-                    PingTarget = go,
+                    PingTarget = pingOverride ?? go,
                     PrefabAssetPath = prefabPath,
                     TransformPath = transformPath,
                     Expanded = true
@@ -491,17 +572,17 @@ namespace SST.StableRef
                     Kind = NodeKind.Component,
                     Label = comp.GetType().Name,
                     Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
-                    PingTarget = comp,
+                    PingTarget = pingOverride ?? comp,
                     PrefabAssetPath = prefabPath,
                     TransformPath = transformPath,
                     Expanded = true
                 };
-                ScanSerializedObject(new SerializedObject(comp), compNode, comp);
+                ScanSerializedObject(new SerializedObject(comp), compNode, pingOverride ?? comp);
                 if (compNode.Children.Count > 0) target.Children.Add(compNode);
             }
 
             foreach (Transform child in go.transform)
-                ScanGameObjectTree(child.gameObject, target, prefabRoot, transformPath);
+                ScanGameObjectTree(child.gameObject, target, prefabRoot, transformPath, pingOverride);
 
             if (!isRoot && target.Children.Count > 0)
                 parentNode.Children.Add(target);
@@ -639,9 +720,48 @@ namespace SST.StableRef
             return node;
         }
 
+        private static void TagScenePath(Node node, string scenePath)
+            => TagScenePathRecursive(node, scenePath, null);
+
+        private static void TagScenePathRecursive(Node node, string scenePath, string inheritedTransformPath)
+        {
+            node.ScenePath = scenePath;
+            if (string.IsNullOrEmpty(node.TransformPath))
+                node.TransformPath = inheritedTransformPath;
+            foreach (var child in node.Children)
+                TagScenePathRecursive(child, scenePath, node.TransformPath);
+        }
+
+        private static GameObject FindInScene(UnityEngine.SceneManagement.Scene scene, string transformPath)
+        {
+            if (string.IsNullOrEmpty(transformPath)) return null;
+            int slash = transformPath.IndexOf('/');
+            string rootName = slash < 0 ? transformPath : transformPath.Substring(0, slash);
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                if (root.name != rootName) continue;
+                if (slash < 0) return root;
+                var found = root.transform.Find(transformPath.Substring(slash + 1));
+                if (found != null) return found.gameObject;
+            }
+            return null;
+        }
+
         private static UnityEngine.Object ResolvePingTarget(Node node)
         {
             if (node.PingTarget == null) return null;
+
+            if (!string.IsNullOrEmpty(node.ScenePath))
+            {
+                var scene = SceneManager.GetSceneByPath(node.ScenePath);
+                if (scene.IsValid() && scene.isLoaded)
+                {
+                    var go = FindInScene(scene, node.TransformPath);
+                    if (go != null) return go;
+                }
+                return node.PingTarget;
+            }
+
             if (string.IsNullOrEmpty(node.PrefabAssetPath)) return node.PingTarget;
 
             var stage = PrefabStageUtility.GetCurrentPrefabStage();
