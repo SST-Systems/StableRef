@@ -15,13 +15,13 @@ namespace SST.StableRef
         public static void Open()
         {
             var w = GetWindow<StableRefMissingTypesWindow>("Fix Missing StableRef Types");
-            w.minSize = new Vector2(480, 300);
+            w.minSize = new Vector2(420, 300);
         }
 
         public static void OpenAndScan()
         {
             var w = GetWindow<StableRefMissingTypesWindow>("Fix Missing StableRef Types");
-            w.minSize = new Vector2(480, 300);
+            w.minSize = new Vector2(420, 300);
             EditorApplication.delayCall += w.DoScan;
         }
 
@@ -101,8 +101,6 @@ namespace SST.StableRef
                 }
 
                 GUILayout.FlexibleSpace();
-
-                StableRefEditorUtility.DrawSceneScanModeDropdown(130f);
 
                 if (GUILayout.Button("Scan Project", EditorStyles.toolbarButton, GUILayout.Width(90f)))
                     DoScan();
@@ -346,17 +344,12 @@ namespace SST.StableRef
             _hasScanned = true;
             _showDomainReloadHint = false;
 
-            var sceneMode = StableRefEditorUtility.SceneScanMode;
-
             var assetGuids = AssetDatabase.FindAssets("t:ScriptableObject", new[] { "Assets" })
                 .Concat(AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" }))
                 .Distinct()
                 .ToArray();
-            var sceneGuids = sceneMode == StableRefSceneScanMode.AllScenes
-                ? AssetDatabase.FindAssets("t:Scene", new[] { "Assets" })
-                : Array.Empty<string>();
 
-            int total = assetGuids.Length + sceneGuids.Length;
+            int total = assetGuids.Length;
             int idx = 0;
 
             try
@@ -380,20 +373,7 @@ namespace SST.StableRef
                     }
                 }
 
-                var scenePaths = new HashSet<string>();
-                if (sceneMode == StableRefSceneScanMode.AllScenes)
-                {
-                    foreach (var guid in sceneGuids)
-                    {
-                        var path = AssetDatabase.GUIDToAssetPath(guid);
-                        EditorUtility.DisplayProgressBar("Scanning scenes…", path, (float)idx++ / total);
-                        scenePaths.Add(path);
-                        ScanScenePath(path);
-                    }
-                }
-
-                if (sceneMode != StableRefSceneScanMode.None)
-                    ScanOpenScenes(scenePaths);
+                ScanActiveScenes();
             }
             finally { EditorUtility.ClearProgressBar(); }
 
@@ -401,40 +381,16 @@ namespace SST.StableRef
             Repaint();
         }
 
-        private void ScanScenePath(string scenePath)
-        {
-            var existingScene = SceneManager.GetSceneByPath(scenePath);
-            bool wasLoaded = existingScene.IsValid() && existingScene.isLoaded;
-
-            UnityEngine.SceneManagement.Scene scene;
-            if (wasLoaded)
-                scene = existingScene;
-            else
-            {
-                try { scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive); }
-                catch { return; }
-            }
-
-            try
-            {
-                foreach (var root in scene.GetRootGameObjects())
-                foreach (var comp in root.GetComponentsInChildren<Component>(true))
-                    if (comp != null)
-                        CollectMissing(comp, scenePath, isScene: true, sceneLoaded: wasLoaded, sceneName: scene.name);
-            }
-            finally
-            {
-                if (!wasLoaded) EditorSceneManager.CloseScene(scene, removeScene: true);
-            }
-        }
-
-        private void ScanOpenScenes(HashSet<string> alreadyScanned)
+        // Only reads scenes that are already open — never opens or closes anything. Opening every
+        // scene in the project additively was expensive on large projects and had side effects
+        // (e.g. triggering the engine's lighting auto-bake), so this only ever looks at what's
+        // already loaded in the editor.
+        private void ScanActiveScenes()
         {
             for (int i = 0; i < SceneManager.sceneCount; i++)
             {
                 var scene = SceneManager.GetSceneAt(i);
                 if (!scene.isLoaded) continue;
-                if (!string.IsNullOrEmpty(scene.path) && alreadyScanned.Contains(scene.path)) continue;
 
                 foreach (var root in scene.GetRootGameObjects())
                 foreach (var comp in root.GetComponentsInChildren<Component>(true))
@@ -529,7 +485,7 @@ namespace SST.StableRef
             _roots = new List<Node>();
 
             var prefabGroup = new Node { Kind = NodeKind.Group, Label = "Prefabs" };
-            var sceneGroup  = new Node { Kind = NodeKind.Group, Label = "Scenes" };
+            var sceneGroup  = new Node { Kind = NodeKind.Group, Label = "Active Scenes" };
             var soGroup     = new Node { Kind = NodeKind.Group, Label = "Scriptable Objects" };
 
             foreach (var assetGroup in _scanEntries.GroupBy(e => e.AssetPath).OrderBy(g => g.Key))
@@ -743,7 +699,11 @@ namespace SST.StableRef
 
             AssetDatabase.SaveAssets();
 
+            // Never opens or closes scenes — only fixes scene objects whose scene is already loaded.
+            // A scene found broken earlier but closed since then is skipped; open it and re-scan to
+            // fix it. This is what keeps Fix All Missings from ever touching scene load state.
             var byScene = entries.Where(n => n.IsSceneObject).GroupBy(n => n.AssetPath).ToList();
+            int skippedScenes = 0;
             try
             {
                 for (int si = 0; si < byScene.Count; si++)
@@ -753,33 +713,22 @@ namespace SST.StableRef
                     EditorUtility.DisplayProgressBar("Fixing scenes…",
                         scenePath, (float)si / byScene.Count);
 
-                    var existingScene = SceneManager.GetSceneByPath(scenePath);
-                    bool wasLoaded = existingScene.IsValid() && existingScene.isLoaded;
-
-                    UnityEngine.SceneManagement.Scene scene;
-                    if (wasLoaded) scene = existingScene;
-                    else
+                    var scene = SceneManager.GetSceneByPath(scenePath);
+                    if (!scene.IsValid() || !scene.isLoaded)
                     {
-                        try { scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive); }
-                        catch { continue; }
+                        skippedScenes++;
+                        continue;
                     }
 
-                    try
+                    foreach (var node in sceneGroup)
                     {
-                        foreach (var node in sceneGroup)
-                        {
-                            var target = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(node.ObjectId);
-                            if (target == null) continue;
-                            fixedCount += FixTarget(target);
-                        }
+                        var target = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(node.ObjectId);
+                        if (target == null) continue;
+                        fixedCount += FixTarget(target);
+                    }
 
-                        EditorSceneManager.SaveScene(scene);
-                        fixedPaths.Add(scenePath);
-                    }
-                    finally
-                    {
-                        if (!wasLoaded) EditorSceneManager.CloseScene(scene, removeScene: true);
-                    }
+                    EditorSceneManager.SaveScene(scene);
+                    fixedPaths.Add(scenePath);
                 }
             }
             finally { EditorUtility.ClearProgressBar(); }
@@ -788,6 +737,13 @@ namespace SST.StableRef
                 AssetDatabase.Refresh();
 
             Debug.Log($"[StableRef] Fixed {fixedCount} missing reference{(fixedCount != 1 ? "s" : "")}.");
+
+            if (skippedScenes > 0)
+            {
+                Debug.LogWarning(
+                    $"[StableRef] Missing references in {skippedScenes} closed scene{(skippedScenes != 1 ? "s" : "")} " +
+                    $"weren't fixed — open {(skippedScenes != 1 ? "them" : "it")} and re-scan to fix.");
+            }
 
             EditorApplication.delayCall += () =>
             {

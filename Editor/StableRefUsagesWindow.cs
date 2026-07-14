@@ -13,10 +13,9 @@ namespace SST.StableRef
     {
         private const float FilterW = 110f;
         private const float FindW = 90f;
-        private const float SceneScanW = 130f;
         private const float SearchW = 160f;
         private const float ClearBtnW = 18f;
-        private const float DefaultW = 520f;
+        private const float DefaultW = 360f;
         private const float DefaultH = 560f;
 
         private enum NodeKind { Group, Asset, GameObject, Component, Item }
@@ -149,8 +148,6 @@ namespace SST.StableRef
                 EditorGUI.EndDisabledGroup();
 
                 GUILayout.FlexibleSpace();
-
-                StableRefEditorUtility.DrawSceneScanModeDropdown(SceneScanW);
 
                 if (GUILayout.Button("Find Usages", EditorStyles.toolbarButton, GUILayout.Width(FindW)))
                     RunSearch();
@@ -376,13 +373,13 @@ namespace SST.StableRef
             _availableTypes.Clear();
 
             var prefabGroup = new Node { Kind = NodeKind.Group, Label = "Prefabs" };
-            var sceneGroup = new Node { Kind = NodeKind.Group, Label = "Scenes" };
+            var sceneGroup = new Node { Kind = NodeKind.Group, Label = "Active Scenes" };
             var soGroup = new Node { Kind = NodeKind.Group, Label = "Scriptable Objects" };
 
             try
             {
                 ScanPrefabs(prefabGroup);
-                ScanScenes(sceneGroup, StableRefEditorUtility.SceneScanMode);
+                ScanScenes(sceneGroup);
                 ScanScriptableObjects(soGroup);
             }
             finally { EditorUtility.ClearProgressBar(); }
@@ -419,65 +416,16 @@ namespace SST.StableRef
             }
         }
 
-        private static void ScanScenes(Node group, StableRefSceneScanMode mode)
+        // Only reads scenes that are already open — never opens or closes anything. Opening every
+        // scene in the project additively was expensive on large projects and had side effects
+        // (e.g. triggering the engine's lighting auto-bake), so this only ever looks at what's
+        // already loaded in the editor.
+        private static void ScanScenes(Node group)
         {
-            if (mode == StableRefSceneScanMode.None) return;
-
-            var scanned = new HashSet<string>();
-
-            if (mode == StableRefSceneScanMode.AllScenes)
-            {
-                var sceneGuids = AssetDatabase.FindAssets("t:Scene", new[] { "Assets" });
-                for (int i = 0; i < sceneGuids.Length; i++)
-                {
-                    var scenePath = AssetDatabase.GUIDToAssetPath(sceneGuids[i]);
-                    EditorUtility.DisplayProgressBar("StableRef Usages",
-                        $"Scenes ({i + 1} / {sceneGuids.Length})", 0.7f + 0.1f * i / sceneGuids.Length);
-
-                    var existingScene = SceneManager.GetSceneByPath(scenePath);
-                    bool wasLoaded = existingScene.IsValid() && existingScene.isLoaded;
-
-                    UnityEngine.SceneManagement.Scene scene;
-                    if (wasLoaded)
-                        scene = existingScene;
-                    else
-                    {
-                        try { scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive); }
-                        catch { continue; }
-                    }
-
-                    scanned.Add(scenePath);
-
-                    var sceneAsset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(scenePath);
-
-                    var sceneNode = new Node
-                    {
-                        Kind = NodeKind.Asset,
-                        Label = Path.GetFileNameWithoutExtension(scenePath),
-                        Icon = EditorGUIUtility.IconContent("d_SceneAsset Icon").image,
-                        PingTarget = sceneAsset
-                    };
-
-                    try
-                    {
-                        foreach (var root in scene.GetRootGameObjects())
-                            ScanGameObjectTree(root, sceneNode, null, "", sceneAsset);
-                    }
-                    finally
-                    {
-                        if (!wasLoaded) EditorSceneManager.CloseScene(scene, removeScene: true);
-                    }
-
-                    TagScenePath(sceneNode, scenePath);
-                    if (sceneNode.Children.Count > 0) group.Children.Add(sceneNode);
-                }
-            }
-
             for (int i = 0; i < SceneManager.sceneCount; i++)
             {
                 var scene = SceneManager.GetSceneAt(i);
                 if (!scene.isLoaded) continue;
-                if (!string.IsNullOrEmpty(scene.path) && scanned.Contains(scene.path)) continue;
 
                 bool hasPath = !string.IsNullOrEmpty(scene.path);
                 var sceneAsset = hasPath
