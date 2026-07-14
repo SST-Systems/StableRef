@@ -52,6 +52,8 @@ namespace SST.StableRef
         private bool _hasScanned;
         private bool _showDomainReloadHint;
 
+        private bool HasAnyResults => _roots != null && _roots.Any(r => r.Children.Count > 0);
+
         private void OnGUI()
         {
             StableRefEditorUtility.EnsureStyles();
@@ -65,13 +67,6 @@ namespace SST.StableRef
                 return;
             }
 
-            if (_roots == null || _roots.Count == 0)
-            {
-                EditorGUILayout.HelpBox("No missing StableRef types found.", MessageType.Info);
-                DrawTips();
-                return;
-            }
-
             _scroll = GUILayout.BeginScrollView(_scroll);
             EditorGUI.indentLevel = 0;
             EditorGUIUtility.SetIconSize(new Vector2(16, 16));
@@ -79,6 +74,8 @@ namespace SST.StableRef
                 if (MatchesFilter(root)) DrawNode(root, 0);
             EditorGUIUtility.SetIconSize(Vector2.zero);
             GUILayout.EndScrollView();
+
+            if (!HasAnyResults) DrawTips();
 
             DrawFooter();
         }
@@ -114,7 +111,20 @@ namespace SST.StableRef
                 case NodeKind.Group:
                     EditorGUI.indentLevel = 0;
                     node.Expanded = DrawFoldout(node, node.Expanded, node.Label, null, StableRefEditorUtility.HeaderStyle);
-                    if (node.Expanded) DrawChildren(node.Children, depth + 1);
+                    if (node.Expanded)
+                    {
+                        bool anyChildVisible = node.Children.Any(MatchesFilter);
+                        if (anyChildVisible)
+                        {
+                            DrawChildren(node.Children, depth + 1);
+                        }
+                        else
+                        {
+                            EditorGUI.indentLevel = 1;
+                            using (new EditorGUI.DisabledScope(true))
+                                EditorGUILayout.LabelField(node.Children.Count == 0 ? "No missing types found" : "No matches");
+                        }
+                    }
                     break;
 
                 case NodeKind.Asset:
@@ -307,8 +317,11 @@ namespace SST.StableRef
             }
 
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Fix All Missings", GUILayout.Width(160), GUILayout.Height(24)))
-                DoFixAll();
+            using (new EditorGUI.DisabledScope(!HasAnyResults))
+            {
+                if (GUILayout.Button("Fix All Missings", GUILayout.Width(160), GUILayout.Height(24)))
+                    DoFixAll();
+            }
             GUILayout.Space(8);
             EditorGUILayout.EndHorizontal();
             GUILayout.Space(4);
@@ -328,6 +341,10 @@ namespace SST.StableRef
             public string AssetPath;
             public bool IsSceneObject;
             public List<MissingRefInfo> MissingRefs;
+            public string TypeName;
+            public List<string> GoNameChain;
+            public bool SceneLoaded;
+            public string SceneName;
         }
 
         private readonly List<ScanEntry> _scanEntries = new();
@@ -344,9 +361,8 @@ namespace SST.StableRef
                 .Concat(AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" }))
                 .Distinct()
                 .ToArray();
-            var sceneGuids = AssetDatabase.FindAssets("t:Scene", new[] { "Assets" });
 
-            int total = assetGuids.Length + sceneGuids.Length;
+            int total = assetGuids.Length;
             int idx = 0;
 
             try
@@ -370,12 +386,7 @@ namespace SST.StableRef
                     }
                 }
 
-                foreach (var guid in sceneGuids)
-                {
-                    var path = AssetDatabase.GUIDToAssetPath(guid);
-                    EditorUtility.DisplayProgressBar("Scanning scenes…", path, (float)idx++ / total);
-                    ScanScenePath(path);
-                }
+                ScanActiveScenes();
             }
             finally { EditorUtility.ClearProgressBar(); }
 
@@ -383,33 +394,26 @@ namespace SST.StableRef
             Repaint();
         }
 
-        private void ScanScenePath(string scenePath)
+        // Only reads scenes that are already open — never opens or closes anything. Opening every
+        // scene in the project additively was expensive on large projects and had side effects
+        // (e.g. triggering the engine's lighting auto-bake), so this only ever looks at what's
+        // already loaded in the editor.
+        private void ScanActiveScenes()
         {
-            var existingScene = SceneManager.GetSceneByPath(scenePath);
-            bool wasLoaded = existingScene.IsValid() && existingScene.isLoaded;
-
-            UnityEngine.SceneManagement.Scene scene;
-            if (wasLoaded)
-                scene = existingScene;
-            else
+            for (int i = 0; i < SceneManager.sceneCount; i++)
             {
-                try { scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive); }
-                catch { return; }
-            }
+                var scene = SceneManager.GetSceneAt(i);
+                if (!scene.isLoaded) continue;
 
-            try
-            {
                 foreach (var root in scene.GetRootGameObjects())
                 foreach (var comp in root.GetComponentsInChildren<Component>(true))
-                    if (comp != null) CollectMissing(comp, scenePath, isScene: true);
-            }
-            finally
-            {
-                if (!wasLoaded) EditorSceneManager.CloseScene(scene, removeScene: true);
+                    if (comp != null)
+                        CollectMissing(comp, scene.path, isScene: true, sceneLoaded: true, sceneName: scene.name);
             }
         }
 
-        private void CollectMissing(UnityEngine.Object target, string assetPath, bool isScene)
+        private void CollectMissing(UnityEngine.Object target, string assetPath, bool isScene,
+            bool sceneLoaded = false, string sceneName = null)
         {
             if (target is not MonoBehaviour && target is not ScriptableObject) return;
             if (!SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
@@ -420,13 +424,26 @@ namespace SST.StableRef
             var missingRefs = CollectMissingRefs(target);
             if (missingRefs.Count == 0) return;
 
+            List<string> goChain = null;
+            if (target is Component comp)
+            {
+                goChain = new List<string>();
+                for (var t = comp.transform; t != null; t = t.parent)
+                    goChain.Add(t.gameObject.name);
+                goChain.Reverse();
+            }
+
             _scanEntries.Add(new ScanEntry
             {
                 Target = target,
                 ObjectId = objectId,
                 AssetPath = assetPath,
                 IsSceneObject = isScene,
-                MissingRefs = missingRefs
+                MissingRefs = missingRefs,
+                TypeName = target.GetType().Name,
+                GoNameChain = goChain,
+                SceneLoaded = sceneLoaded,
+                SceneName = sceneName
             });
         }
 
@@ -481,7 +498,7 @@ namespace SST.StableRef
             _roots = new List<Node>();
 
             var prefabGroup = new Node { Kind = NodeKind.Group, Label = "Prefabs" };
-            var sceneGroup  = new Node { Kind = NodeKind.Group, Label = "Scenes" };
+            var sceneGroup  = new Node { Kind = NodeKind.Group, Label = "Active Scenes" };
             var soGroup     = new Node { Kind = NodeKind.Group, Label = "Scriptable Objects" };
 
             foreach (var assetGroup in _scanEntries.GroupBy(e => e.AssetPath).OrderBy(g => g.Key))
@@ -493,42 +510,51 @@ namespace SST.StableRef
                 Node targetGroup;
                 if (isScene)
                     targetGroup = sceneGroup;
-                else if (firstEntry.Target is ScriptableObject)
+                else if (firstEntry.GoNameChain == null)
                     targetGroup = soGroup;
                 else
                     targetGroup = prefabGroup;
 
+                var assetObject = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(assetPath);
+
                 var assetNode = new Node
                 {
                     Kind = NodeKind.Asset,
-                    Label = System.IO.Path.GetFileNameWithoutExtension(assetPath),
+                    Label = string.IsNullOrEmpty(assetPath)
+                        ? (string.IsNullOrEmpty(firstEntry.SceneName) ? "Untitled" : firstEntry.SceneName)
+                        : System.IO.Path.GetFileNameWithoutExtension(assetPath),
                     Icon = isScene
                         ? EditorGUIUtility.IconContent("d_SceneAsset Icon").image
                         : AssetDatabase.GetCachedIcon(assetPath),
-                    PingTarget = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(assetPath),
+                    PingTarget = assetObject,
                     AssetPath = assetPath
                 };
 
                 foreach (var entry in assetGroup)
                 {
-                    if (entry.Target is ScriptableObject so)
+                    if (entry.GoNameChain == null)
                     {
                         var compNode = new Node
                         {
                             Kind = NodeKind.Component,
-                            Label = so.GetType().Name,
+                            Label = entry.TypeName,
                             Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
-                            PingTarget = so,
+                            PingTarget = entry.Target,
                             ObjectId = entry.ObjectId,
                             AssetPath = assetPath,
                             IsSceneObject = false
                         };
-                        AddMissingRefNodes(compNode, entry.MissingRefs, so);
+                        AddMissingRefNodes(compNode, entry.MissingRefs, entry.Target);
                         assetNode.Children.Add(compNode);
                     }
-                    else if (entry.Target is Component comp)
+                    else
                     {
-                        InsertComponentIntoHierarchy(assetNode, comp, entry, assetPath);
+                        bool liveTarget = !entry.IsSceneObject
+                                          || (entry.SceneLoaded && entry.Target != null);
+                        if (liveTarget)
+                            InsertComponentIntoHierarchy(assetNode, (Component)entry.Target, entry, assetPath);
+                        else
+                            InsertSceneComponentIntoHierarchy(assetNode, entry, assetPath, assetObject);
                     }
                 }
 
@@ -536,9 +562,9 @@ namespace SST.StableRef
                     targetGroup.Children.Add(assetNode);
             }
 
-            if (prefabGroup.Children.Count > 0) _roots.Add(prefabGroup);
-            if (sceneGroup.Children.Count > 0)  _roots.Add(sceneGroup);
-            if (soGroup.Children.Count > 0)     _roots.Add(soGroup);
+            _roots.Add(prefabGroup);
+            _roots.Add(sceneGroup);
+            _roots.Add(soGroup);
         }
 
         private static void AddMissingRefNodes(Node compNode, List<MissingRefInfo> missingRefs, UnityEngine.Object pingTarget)
@@ -616,6 +642,45 @@ namespace SST.StableRef
             current.Children.Add(compNode);
         }
 
+        private static void InsertSceneComponentIntoHierarchy(
+            Node assetNode, ScanEntry entry, string assetPath, UnityEngine.Object sceneAsset)
+        {
+            Node current = assetNode;
+            var chain = entry.GoNameChain;
+            for (int i = 0; i < chain.Count; i++)
+            {
+                string goName = chain[i];
+                var existing = current.Children.FirstOrDefault(
+                    n => n.Kind == NodeKind.GameObject && n.Label == goName);
+
+                if (existing == null)
+                {
+                    existing = new Node
+                    {
+                        Kind = NodeKind.GameObject,
+                        Label = goName,
+                        Icon = StableRefEditorUtility.GoIcon,
+                        PingTarget = sceneAsset
+                    };
+                    current.Children.Add(existing);
+                }
+                current = existing;
+            }
+
+            var compNode = new Node
+            {
+                Kind = NodeKind.Component,
+                Label = entry.TypeName,
+                Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
+                PingTarget = sceneAsset,
+                ObjectId = entry.ObjectId,
+                AssetPath = assetPath,
+                IsSceneObject = true
+            };
+            AddMissingRefNodes(compNode, entry.MissingRefs, sceneAsset);
+            current.Children.Add(compNode);
+        }
+
         private void DoFixAll()
         {
             var components = new List<Node>();
@@ -647,7 +712,11 @@ namespace SST.StableRef
 
             AssetDatabase.SaveAssets();
 
+            // Never opens or closes scenes — only fixes scene objects whose scene is already loaded.
+            // A scene found broken earlier but closed since then is skipped; open it and re-scan to
+            // fix it. This is what keeps Fix All Missings from ever touching scene load state.
             var byScene = entries.Where(n => n.IsSceneObject).GroupBy(n => n.AssetPath).ToList();
+            int skippedScenes = 0;
             try
             {
                 for (int si = 0; si < byScene.Count; si++)
@@ -657,33 +726,22 @@ namespace SST.StableRef
                     EditorUtility.DisplayProgressBar("Fixing scenes…",
                         scenePath, (float)si / byScene.Count);
 
-                    var existingScene = SceneManager.GetSceneByPath(scenePath);
-                    bool wasLoaded = existingScene.IsValid() && existingScene.isLoaded;
-
-                    UnityEngine.SceneManagement.Scene scene;
-                    if (wasLoaded) scene = existingScene;
-                    else
+                    var scene = SceneManager.GetSceneByPath(scenePath);
+                    if (!scene.IsValid() || !scene.isLoaded)
                     {
-                        try { scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive); }
-                        catch { continue; }
+                        skippedScenes++;
+                        continue;
                     }
 
-                    try
+                    foreach (var node in sceneGroup)
                     {
-                        foreach (var node in sceneGroup)
-                        {
-                            var target = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(node.ObjectId);
-                            if (target == null) continue;
-                            fixedCount += FixTarget(target);
-                        }
+                        var target = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(node.ObjectId);
+                        if (target == null) continue;
+                        fixedCount += FixTarget(target);
+                    }
 
-                        EditorSceneManager.SaveScene(scene);
-                        fixedPaths.Add(scenePath);
-                    }
-                    finally
-                    {
-                        if (!wasLoaded) EditorSceneManager.CloseScene(scene, removeScene: true);
-                    }
+                    EditorSceneManager.SaveScene(scene);
+                    fixedPaths.Add(scenePath);
                 }
             }
             finally { EditorUtility.ClearProgressBar(); }
@@ -693,11 +751,18 @@ namespace SST.StableRef
 
             Debug.Log($"[StableRef] Fixed {fixedCount} missing reference{(fixedCount != 1 ? "s" : "")}.");
 
+            if (skippedScenes > 0)
+            {
+                Debug.LogWarning(
+                    $"[StableRef] Missing references in {skippedScenes} closed scene{(skippedScenes != 1 ? "s" : "")} " +
+                    $"weren't fixed — open {(skippedScenes != 1 ? "them" : "it")} and re-scan to fix.");
+            }
+
             EditorApplication.delayCall += () =>
             {
                 StableRefHandler.ClearHadValue();
                 DoScan();
-                _showDomainReloadHint = _roots != null && _roots.Count > 0;
+                _showDomainReloadHint = HasAnyResults;
                 Repaint();
             };
         }

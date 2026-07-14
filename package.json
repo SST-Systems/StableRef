@@ -1,6 +1,6 @@
 {
   "name": "com.sst-systems.stableref",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "displayName": "StableRef",
   "description": "Serializable polymorphic reference wrapper built on [SerializeReference] that survives class renames. Stores a stable string type ID alongside the object. Includes editor tools: searchable type selector, find-usages window, and missing-types report.",
   "unity": "2021.3",

@@ -210,6 +210,8 @@ namespace SST.StableRef
                     var t = types[ti];
                     if (t.IsAbstract || t.IsInterface || !baseType.IsAssignableFrom(t)) continue;
 
+                    if (StableRefTypeRegistry.GetOrAssignId(t) == null) continue;
+
                     var cat = t.GetCustomAttribute<StableRefCategoryAttribute>();
                     string catS = cat?.Category ?? "";
                     string fullPath = string.IsNullOrEmpty(catS) ? t.Name : $"{catS}/{t.Name}";

@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEditor;
+using UnityEngine;
 
 namespace SST.StableRef
 {
@@ -9,15 +10,18 @@ namespace SST.StableRef
     {
         private static readonly Dictionary<string, Type> _idToType = new();
         private static readonly Dictionary<Type, string> _typeToId = new();
-        
+
         private static readonly HashSet<string> _missingIds = new();
+        private static readonly HashSet<Type> _missingTypes = new();
 
         public static string GetOrAssignId(Type type)
         {
             if (type == null) return null;
 
             if (_typeToId.TryGetValue(type, out var cached)) return cached;
-            
+
+            if (_missingTypes.Contains(type)) return null;
+
             var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(StableTypeIdAttribute));
 
             if (attr != null)
@@ -40,6 +44,8 @@ namespace SST.StableRef
                 }
             }
 
+            _missingTypes.Add(type);
+            Debug.LogWarning($"[StableRef] '{type.Name}' needs its own file to get a stable ID (or add [StableTypeId]).");
             return null;
         }
 
@@ -84,6 +90,8 @@ namespace SST.StableRef
         {
             _idToType[id] = type;
             _typeToId[type] = id;
+            _missingTypes.Remove(type);
+            _missingIds.Remove(id);
         }
     }
 }
