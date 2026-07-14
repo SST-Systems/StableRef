@@ -13,9 +13,10 @@ namespace SST.StableRef
     {
         private const float FilterW = 110f;
         private const float FindW = 90f;
+        private const float SceneScanW = 130f;
         private const float SearchW = 160f;
         private const float ClearBtnW = 18f;
-        private const float DefaultW = 360f;
+        private const float DefaultW = 520f;
         private const float DefaultH = 560f;
 
         private enum NodeKind { Group, Asset, GameObject, Component, Item }
@@ -148,6 +149,8 @@ namespace SST.StableRef
                 EditorGUI.EndDisabledGroup();
 
                 GUILayout.FlexibleSpace();
+
+                StableRefEditorUtility.DrawSceneScanModeDropdown(SceneScanW);
 
                 if (GUILayout.Button("Find Usages", EditorStyles.toolbarButton, GUILayout.Width(FindW)))
                     RunSearch();
@@ -379,7 +382,7 @@ namespace SST.StableRef
             try
             {
                 ScanPrefabs(prefabGroup);
-                ScanScenes(sceneGroup);
+                ScanScenes(sceneGroup, StableRefEditorUtility.SceneScanMode);
                 ScanScriptableObjects(soGroup);
             }
             finally { EditorUtility.ClearProgressBar(); }
@@ -416,53 +419,58 @@ namespace SST.StableRef
             }
         }
 
-        private static void ScanScenes(Node group)
+        private static void ScanScenes(Node group, StableRefSceneScanMode mode)
         {
+            if (mode == StableRefSceneScanMode.None) return;
+
             var scanned = new HashSet<string>();
 
-            var sceneGuids = AssetDatabase.FindAssets("t:Scene", new[] { "Assets" });
-            for (int i = 0; i < sceneGuids.Length; i++)
+            if (mode == StableRefSceneScanMode.AllScenes)
             {
-                var scenePath = AssetDatabase.GUIDToAssetPath(sceneGuids[i]);
-                EditorUtility.DisplayProgressBar("StableRef Usages",
-                    $"Scenes ({i + 1} / {sceneGuids.Length})", 0.7f + 0.1f * i / sceneGuids.Length);
-
-                var existingScene = SceneManager.GetSceneByPath(scenePath);
-                bool wasLoaded = existingScene.IsValid() && existingScene.isLoaded;
-
-                UnityEngine.SceneManagement.Scene scene;
-                if (wasLoaded)
-                    scene = existingScene;
-                else
+                var sceneGuids = AssetDatabase.FindAssets("t:Scene", new[] { "Assets" });
+                for (int i = 0; i < sceneGuids.Length; i++)
                 {
-                    try { scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive); }
-                    catch { continue; }
+                    var scenePath = AssetDatabase.GUIDToAssetPath(sceneGuids[i]);
+                    EditorUtility.DisplayProgressBar("StableRef Usages",
+                        $"Scenes ({i + 1} / {sceneGuids.Length})", 0.7f + 0.1f * i / sceneGuids.Length);
+
+                    var existingScene = SceneManager.GetSceneByPath(scenePath);
+                    bool wasLoaded = existingScene.IsValid() && existingScene.isLoaded;
+
+                    UnityEngine.SceneManagement.Scene scene;
+                    if (wasLoaded)
+                        scene = existingScene;
+                    else
+                    {
+                        try { scene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive); }
+                        catch { continue; }
+                    }
+
+                    scanned.Add(scenePath);
+
+                    var sceneAsset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(scenePath);
+
+                    var sceneNode = new Node
+                    {
+                        Kind = NodeKind.Asset,
+                        Label = Path.GetFileNameWithoutExtension(scenePath),
+                        Icon = EditorGUIUtility.IconContent("d_SceneAsset Icon").image,
+                        PingTarget = sceneAsset
+                    };
+
+                    try
+                    {
+                        foreach (var root in scene.GetRootGameObjects())
+                            ScanGameObjectTree(root, sceneNode, null, "", sceneAsset);
+                    }
+                    finally
+                    {
+                        if (!wasLoaded) EditorSceneManager.CloseScene(scene, removeScene: true);
+                    }
+
+                    TagScenePath(sceneNode, scenePath);
+                    if (sceneNode.Children.Count > 0) group.Children.Add(sceneNode);
                 }
-
-                scanned.Add(scenePath);
-
-                var sceneAsset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(scenePath);
-
-                var sceneNode = new Node
-                {
-                    Kind = NodeKind.Asset,
-                    Label = Path.GetFileNameWithoutExtension(scenePath),
-                    Icon = EditorGUIUtility.IconContent("d_SceneAsset Icon").image,
-                    PingTarget = sceneAsset
-                };
-
-                try
-                {
-                    foreach (var root in scene.GetRootGameObjects())
-                        ScanGameObjectTree(root, sceneNode, null, "", sceneAsset);
-                }
-                finally
-                {
-                    if (!wasLoaded) EditorSceneManager.CloseScene(scene, removeScene: true);
-                }
-
-                TagScenePath(sceneNode, scenePath);
-                if (sceneNode.Children.Count > 0) group.Children.Add(sceneNode);
             }
 
             for (int i = 0; i < SceneManager.sceneCount; i++)

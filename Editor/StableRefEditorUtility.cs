@@ -6,6 +6,13 @@ using UnityEngine;
 
 namespace SST.StableRef
 {
+    internal enum StableRefSceneScanMode
+    {
+        None,
+        OpenScenesOnly,
+        AllScenes
+    }
+
     internal static class StableRefEditorUtility
     {
         public const float ArrowW = 14f;
@@ -88,6 +95,42 @@ namespace SST.StableRef
                     return;
                 }
             }
+        }
+
+        private const string PrefSceneScanMode = "StableRef_SceneScanMode";
+
+        public static StableRefSceneScanMode SceneScanMode
+        {
+            get => (StableRefSceneScanMode)EditorPrefs.GetInt(PrefSceneScanMode, (int)StableRefSceneScanMode.AllScenes);
+            set => EditorPrefs.SetInt(PrefSceneScanMode, (int)value);
+        }
+
+        public static string GetSceneScanModeLabel(StableRefSceneScanMode mode)
+        {
+            switch (mode)
+            {
+                case StableRefSceneScanMode.None: return "Don't Scan Scenes";
+                case StableRefSceneScanMode.OpenScenesOnly: return "Scan Open Scenes";
+                case StableRefSceneScanMode.AllScenes: return "Scan All Scenes";
+                default: return mode.ToString();
+            }
+        }
+
+        public static void DrawSceneScanModeDropdown(float width)
+        {
+            var current = SceneScanMode;
+            if (!EditorGUILayout.DropdownButton(
+                    new GUIContent(GetSceneScanModeLabel(current)), FocusType.Passive,
+                    EditorStyles.toolbarDropDown, GUILayout.Width(width)))
+                return;
+
+            var menu = new GenericMenu();
+            foreach (StableRefSceneScanMode mode in Enum.GetValues(typeof(StableRefSceneScanMode)))
+            {
+                var m = mode;
+                menu.AddItem(new GUIContent(GetSceneScanModeLabel(m)), current == m, () => SceneScanMode = m);
+            }
+            menu.ShowAsContext();
         }
     }
 }

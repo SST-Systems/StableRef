@@ -15,13 +15,13 @@ namespace SST.StableRef
         public static void Open()
         {
             var w = GetWindow<StableRefMissingTypesWindow>("Fix Missing StableRef Types");
-            w.minSize = new Vector2(420, 300);
+            w.minSize = new Vector2(480, 300);
         }
 
         public static void OpenAndScan()
         {
             var w = GetWindow<StableRefMissingTypesWindow>("Fix Missing StableRef Types");
-            w.minSize = new Vector2(420, 300);
+            w.minSize = new Vector2(480, 300);
             EditorApplication.delayCall += w.DoScan;
         }
 
@@ -101,6 +101,8 @@ namespace SST.StableRef
                 }
 
                 GUILayout.FlexibleSpace();
+
+                StableRefEditorUtility.DrawSceneScanModeDropdown(130f);
 
                 if (GUILayout.Button("Scan Project", EditorStyles.toolbarButton, GUILayout.Width(90f)))
                     DoScan();
@@ -344,11 +346,15 @@ namespace SST.StableRef
             _hasScanned = true;
             _showDomainReloadHint = false;
 
+            var sceneMode = StableRefEditorUtility.SceneScanMode;
+
             var assetGuids = AssetDatabase.FindAssets("t:ScriptableObject", new[] { "Assets" })
                 .Concat(AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" }))
                 .Distinct()
                 .ToArray();
-            var sceneGuids = AssetDatabase.FindAssets("t:Scene", new[] { "Assets" });
+            var sceneGuids = sceneMode == StableRefSceneScanMode.AllScenes
+                ? AssetDatabase.FindAssets("t:Scene", new[] { "Assets" })
+                : Array.Empty<string>();
 
             int total = assetGuids.Length + sceneGuids.Length;
             int idx = 0;
@@ -375,15 +381,19 @@ namespace SST.StableRef
                 }
 
                 var scenePaths = new HashSet<string>();
-                foreach (var guid in sceneGuids)
+                if (sceneMode == StableRefSceneScanMode.AllScenes)
                 {
-                    var path = AssetDatabase.GUIDToAssetPath(guid);
-                    EditorUtility.DisplayProgressBar("Scanning scenes…", path, (float)idx++ / total);
-                    scenePaths.Add(path);
-                    ScanScenePath(path);
+                    foreach (var guid in sceneGuids)
+                    {
+                        var path = AssetDatabase.GUIDToAssetPath(guid);
+                        EditorUtility.DisplayProgressBar("Scanning scenes…", path, (float)idx++ / total);
+                        scenePaths.Add(path);
+                        ScanScenePath(path);
+                    }
                 }
 
-                ScanOpenScenes(scenePaths);
+                if (sceneMode != StableRefSceneScanMode.None)
+                    ScanOpenScenes(scenePaths);
             }
             finally { EditorUtility.ClearProgressBar(); }
 
