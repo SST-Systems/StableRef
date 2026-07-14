@@ -52,6 +52,8 @@ namespace SST.StableRef
         private bool _hasScanned;
         private bool _showDomainReloadHint;
 
+        private bool HasAnyResults => _roots != null && _roots.Any(r => r.Children.Count > 0);
+
         private void OnGUI()
         {
             StableRefEditorUtility.EnsureStyles();
@@ -65,13 +67,6 @@ namespace SST.StableRef
                 return;
             }
 
-            if (_roots == null || _roots.Count == 0)
-            {
-                EditorGUILayout.HelpBox("No missing StableRef types found.", MessageType.Info);
-                DrawTips();
-                return;
-            }
-
             _scroll = GUILayout.BeginScrollView(_scroll);
             EditorGUI.indentLevel = 0;
             EditorGUIUtility.SetIconSize(new Vector2(16, 16));
@@ -79,6 +74,8 @@ namespace SST.StableRef
                 if (MatchesFilter(root)) DrawNode(root, 0);
             EditorGUIUtility.SetIconSize(Vector2.zero);
             GUILayout.EndScrollView();
+
+            if (!HasAnyResults) DrawTips();
 
             DrawFooter();
         }
@@ -114,7 +111,20 @@ namespace SST.StableRef
                 case NodeKind.Group:
                     EditorGUI.indentLevel = 0;
                     node.Expanded = DrawFoldout(node, node.Expanded, node.Label, null, StableRefEditorUtility.HeaderStyle);
-                    if (node.Expanded) DrawChildren(node.Children, depth + 1);
+                    if (node.Expanded)
+                    {
+                        bool anyChildVisible = node.Children.Any(MatchesFilter);
+                        if (anyChildVisible)
+                        {
+                            DrawChildren(node.Children, depth + 1);
+                        }
+                        else
+                        {
+                            EditorGUI.indentLevel = 1;
+                            using (new EditorGUI.DisabledScope(true))
+                                EditorGUILayout.LabelField(node.Children.Count == 0 ? "No missing types found" : "No matches");
+                        }
+                    }
                     break;
 
                 case NodeKind.Asset:
@@ -307,8 +317,11 @@ namespace SST.StableRef
             }
 
             GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Fix All Missings", GUILayout.Width(160), GUILayout.Height(24)))
-                DoFixAll();
+            using (new EditorGUI.DisabledScope(!HasAnyResults))
+            {
+                if (GUILayout.Button("Fix All Missings", GUILayout.Width(160), GUILayout.Height(24)))
+                    DoFixAll();
+            }
             GUILayout.Space(8);
             EditorGUILayout.EndHorizontal();
             GUILayout.Space(4);
@@ -549,9 +562,9 @@ namespace SST.StableRef
                     targetGroup.Children.Add(assetNode);
             }
 
-            if (prefabGroup.Children.Count > 0) _roots.Add(prefabGroup);
-            if (sceneGroup.Children.Count > 0)  _roots.Add(sceneGroup);
-            if (soGroup.Children.Count > 0)     _roots.Add(soGroup);
+            _roots.Add(prefabGroup);
+            _roots.Add(sceneGroup);
+            _roots.Add(soGroup);
         }
 
         private static void AddMissingRefNodes(Node compNode, List<MissingRefInfo> missingRefs, UnityEngine.Object pingTarget)
@@ -749,7 +762,7 @@ namespace SST.StableRef
             {
                 StableRefHandler.ClearHadValue();
                 DoScan();
-                _showDomainReloadHint = _roots != null && _roots.Count > 0;
+                _showDomainReloadHint = HasAnyResults;
                 Repaint();
             };
         }
