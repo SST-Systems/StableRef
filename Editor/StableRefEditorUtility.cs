@@ -10,6 +10,8 @@ namespace SST.StableRef
     {
         public const float ArrowW = 14f;
 
+        public const string ValueLabelPrefix = "SR: ";
+
         public static readonly Color SelectionColor = new Color(0.17f, 0.44f, 0.75f, 0.8f);
         public static readonly Color SelectionTextColor = Color.white;
 

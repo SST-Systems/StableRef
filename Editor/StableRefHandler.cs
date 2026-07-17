@@ -86,7 +86,7 @@ namespace SST.StableRef
                 if (string.IsNullOrEmpty(displayName)) displayName = "?";
 
                 var recoveredType = StableRefTypeRegistry.GetType(typeIdProp.stringValue);
-                string newName = recoveredType != null ? recoveredType.Name : "None";
+                string newName = recoveredType != null ? StableRefGenericUtils.DisplayName(recoveredType) : "None";
 
                 BrokenLabelOverride = new GUIContent($"Missing ({displayName}) → {newName}");
                 BrokenColorOverride = new Color(0.65f, 0.65f, 0.65f);
@@ -220,8 +220,8 @@ namespace SST.StableRef
             var t = property.managedReferenceValue.GetType();
             var cat = t.GetCustomAttribute<StableRefCategoryAttribute>();
             return cat != null && StableRefSelectorWindow.ShowCategoryInLabel
-                ? $"{cat.Category}/{t.Name}"
-                : t.Name;
+                ? $"{cat.Category}/{StableRefGenericUtils.DisplayName(t)}"
+                : StableRefGenericUtils.DisplayName(t);
         }
 
         private static GUIContent TruncatedLabel(GUIContent label, float maxWidth)
@@ -261,11 +261,12 @@ namespace SST.StableRef
             var id = StableRefTypeRegistry.GetOrAssignId(type);
             if (id == null) return;
 
+            var displayName = StableRefGenericUtils.DisplayName(type);
             var dispProp = wrapperProp.FindPropertyRelative("TypeDisplayName");
-            if (typeIdProp.stringValue == id && dispProp?.stringValue == type.Name) return;
+            if (typeIdProp.stringValue == id && dispProp?.stringValue == displayName) return;
 
             typeIdProp.stringValue = id;
-            if (dispProp != null) dispProp.stringValue = type.Name;
+            if (dispProp != null) dispProp.stringValue = displayName;
             SnapshotBackup(wrapperProp, valueProp);
         }
 

@@ -25,6 +25,7 @@ StableRef makes working with polymorphic serialized references stable and comfor
   - [Declaring a stable type](#declaring-a-stable-type)
   - [Using StableRef\<T\> in a field](#using-stablefrt-in-a-field)
   - [Using StableRefList\<T\>](#using-stablereflistt)
+  - [Generic value types](#generic-value-types)
 - [Auto-generated ID](#auto-generated-id)
 - [Editor tools](#editor-tools)
 - [Copying and pasting](#copying-and-pasting)
@@ -107,9 +108,24 @@ foreach (var stableRef in config.Effects)
 }
 ```
 
+`StableRefList<T>` also works like a `List<T>` from code — `Add`, `Insert`, `Remove`, `RemoveAt`, `RemoveAll`, `Clear`, `Contains`, `IndexOf`, `Find`, and so on:
+
+```csharp
+config.Effects.Add(new DamageOnHit { Amount = 5 });
+config.Effects.RemoveAll(e => e is DamageOnHit);
+```
+
+Indexing and `foreach` yield the `StableRef<T>` wrapper (read the value via `.Value`); the query and mutation helpers work with `T` directly. `Items` exposes the underlying `List<StableRef<T>>` for the full `List` API.
+
+When you build a list from an **editor script** rather than the inspector, call `StableRefSync.AssignIds(list)` before saving so the new entries receive their stable IDs (the inspector does this automatically when a field is drawn).
+
 <p align="center">
   <img src="Documentation~/inspector.gif" alt="Adding a type via the typed dropdown" width="580">
 </p>
+
+### Generic value types
+
+The selector also supports closed generic element types. For a field like `StableRefList<ICondition<Unit>>`, open generic definitions that satisfy it (e.g. `All<TContext>`, `Any<TContext>`) are offered and closed with the field's own argument (`All<Unit>`). Each type used as a generic argument needs its own stable ID — its own file, or `[StableTypeId]` — just like any other StableRef type.
 
 ---
 
@@ -122,6 +138,8 @@ foreach (var stableRef in config.Effects)
 - **Deleting and recreating the file** — the reference is lost (resolves to `null`), but handled gracefully. The project continues to work; the missing type will appear in the Fix Missing Types report.
 
 For types you plan to refactor heavily, an explicit `[StableTypeId]` is more reliable since it survives even if the script file is deleted and re-created.
+
+Switching a type from an auto-generated ID to an explicit `[StableTypeId]` is safe and does **not** create missing references. The explicit ID takes priority, and existing references migrate automatically — the stored ID is rewritten from the MonoScript GUID to your custom ID the next time the field is drawn in the inspector (or when you call `StableRefSync`). Until then the old GUID still resolves (the script file is unchanged), so nothing goes missing. If you're adding the attribute specifically to prepare for a heavy refactor (deleting and recreating the file), re-save the affected assets first so the new ID is locked in.
 
 > **Important:** don't put multiple classes in a single script file. Automatic ID generation relies on the MonoScript GUID, which is assigned to the file rather than the class — with multiple classes per file, ID generation will not work correctly.
 

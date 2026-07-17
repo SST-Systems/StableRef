@@ -22,6 +22,24 @@ namespace SST.StableRef
 
             if (_missingTypes.Contains(type)) return null;
 
+            if (type.IsGenericType && !type.IsGenericTypeDefinition)
+            {
+                var defId = GetOrAssignId(type.GetGenericTypeDefinition());
+                if (defId == null) { _missingTypes.Add(type); return null; }
+
+                var args = type.GetGenericArguments();
+                var argIds = new string[args.Length];
+                for (int i = 0; i < args.Length; i++)
+                {
+                    argIds[i] = GetOrAssignId(args[i]);
+                    if (argIds[i] == null) { _missingTypes.Add(type); return null; }
+                }
+
+                var composite = BuildGenericId(defId, argIds);
+                Register(composite, type);
+                return composite;
+            }
+
             var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(StableTypeIdAttribute));
 
             if (attr != null)
@@ -30,7 +48,11 @@ namespace SST.StableRef
                 return attr.Id;
             }
 
-            var guids = AssetDatabase.FindAssets($"t:MonoScript {type.Name}");
+            var searchName = type.Name;
+            int tick = searchName.IndexOf('`');
+            if (tick >= 0) searchName = searchName.Substring(0, tick);
+
+            var guids = AssetDatabase.FindAssets($"t:MonoScript {searchName}");
 
             foreach (var guid in guids)
             {
@@ -54,9 +76,32 @@ namespace SST.StableRef
             if (string.IsNullOrEmpty(id)) return null;
 
             if (_idToType.TryGetValue(id, out var cached)) return cached;
-            
+
             if (_missingIds.Contains(id)) return null;
-            
+
+            if (TryParseGenericId(id, out var defId, out var argIds))
+            {
+                var def = GetType(defId);
+                if (def == null || !def.IsGenericTypeDefinition
+                    || def.GetGenericArguments().Length != argIds.Length)
+                { _missingIds.Add(id); return null; }
+
+                var typeArgs = new Type[argIds.Length];
+                for (int i = 0; i < argIds.Length; i++)
+                {
+                    typeArgs[i] = GetType(argIds[i]);
+                    if (typeArgs[i] == null) { _missingIds.Add(id); return null; }
+                }
+
+                try
+                {
+                    var closed = def.MakeGenericType(typeArgs);
+                    Register(id, closed);
+                    return closed;
+                }
+                catch { _missingIds.Add(id); return null; }
+            }
+
             var path = AssetDatabase.GUIDToAssetPath(id);
 
             if (!string.IsNullOrEmpty(path))
@@ -70,18 +115,12 @@ namespace SST.StableRef
                 }
             }
 
-            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            foreach (var t in TypeCache.GetTypesWithAttribute<StableTypeIdAttribute>())
             {
-                Type[] types;
-                try { types = asm.GetTypes(); } catch { continue; }
-
-                foreach (var t in types)
-                {
-                    var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(t, typeof(StableTypeIdAttribute));
-                    if (attr != null && attr.Id == id) { Register(id, t); return t; }
-                }
+                var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(t, typeof(StableTypeIdAttribute));
+                if (attr != null && attr.Id == id) { Register(id, t); return t; }
             }
-            
+
             _missingIds.Add(id);
             return null;
         }
@@ -92,6 +131,68 @@ namespace SST.StableRef
             _typeToId[type] = id;
             _missingTypes.Remove(type);
             _missingIds.Remove(id);
+        }
+
+        [InitializeOnLoadMethod]
+        private static void WarnDuplicateStableIds()
+        {
+            var byId = new Dictionary<string, Type>();
+            foreach (var type in TypeCache.GetTypesWithAttribute<StableTypeIdAttribute>())
+            {
+                var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(StableTypeIdAttribute));
+                if (attr == null || string.IsNullOrEmpty(attr.Id)) continue;
+
+                if (byId.TryGetValue(attr.Id, out var first))
+                {
+                    Debug.LogError(
+                        $"[StableRef] Duplicate [StableTypeId(\"{attr.Id}\")] on '{first.FullName}' and '{type.FullName}'. IDs must be unique.");
+                }
+                else
+                {
+                    byId[attr.Id] = type;
+                }
+            }
+        }
+
+        private const char GenOpen = '<';
+        private const char GenClose = '>';
+        private const char GenSep = ',';
+
+        private static string BuildGenericId(string defId, string[] argIds)
+            => defId + GenOpen + string.Join(GenSep.ToString(), argIds) + GenClose;
+
+        private static bool TryParseGenericId(string id, out string defId, out string[] argIds)
+        {
+            defId = null;
+            argIds = null;
+
+            int lt = id.IndexOf(GenOpen);
+            if (lt <= 0 || id[id.Length - 1] != GenClose) return false;
+
+            defId = id.Substring(0, lt);
+            string inner = id.Substring(lt + 1, id.Length - lt - 2);
+            argIds = SplitTopLevel(inner);
+            return argIds.Length > 0;
+        }
+
+        private static string[] SplitTopLevel(string s)
+        {
+            var result = new List<string>();
+            int depth = 0;
+            int start = 0;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c == GenOpen) depth++;
+                else if (c == GenClose) depth--;
+                else if (c == GenSep && depth == 0)
+                {
+                    result.Add(s.Substring(start, i - start));
+                    start = i + 1;
+                }
+            }
+            result.Add(s.Substring(start));
+            return result.ToArray();
         }
     }
 }

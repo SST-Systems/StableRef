@@ -40,7 +40,6 @@ namespace SST.StableRef
             return TryResolvePath(property, out var r) && r.IsStableRefValue;
         }
 
-        // True when the property is a StableRefList<T> field (the container type).
         public static bool IsStableRefList(SerializedProperty property)
         {
             if (property.propertyType != SerializedPropertyType.Generic) return false;
@@ -48,11 +47,9 @@ namespace SST.StableRef
             return r.ValueType != null && typeof(StableRefListBase).IsAssignableFrom(r.ValueType);
         }
 
-        // Returns the _items sub-property of a StableRefList<T> property.
         public static SerializedProperty GetStableRefListItems(SerializedProperty property)
             => property.FindPropertyRelative("_items");
 
-        // True when the array's element type is StableRefBase (i.e. List<StableRef<T>>._items).
         public static bool IsStableRefArray(SerializedProperty property)
         {
             if (property == null || !property.isArray) return false;
@@ -155,7 +152,6 @@ namespace SST.StableRef
             return array != null && array.isArray;
         }
         
-        // Finds a single StableRefList<T> child of 'property' and returns its _items array.
         public static bool TryFindStableRefListChild(SerializedProperty property, out SerializedProperty result)
         {
             result = null;
@@ -198,39 +194,74 @@ namespace SST.StableRef
         public static TypeEntry[] GetEntries(SerializedProperty property)
         {
             var baseType = GetBaseType(property);
+
+            if (!(baseType.IsGenericType && !baseType.IsGenericTypeDefinition)
+                && TryGetValueFieldType(property, out var reflected)
+                && reflected != null && reflected.IsGenericType && !reflected.IsGenericTypeDefinition
+                && (baseType == typeof(object) || baseType.IsAssignableFrom(reflected) || reflected.IsAssignableFrom(baseType)))
+                baseType = reflected;
+
             if (_typeCache.TryGetValue(baseType, out var cached)) return cached;
 
             var result = new List<TypeEntry>();
-            var asms = AppDomain.CurrentDomain.GetAssemblies();
-            for (int ai = 0; ai < asms.Length; ai++)
+
+            var query = baseType.IsGenericType && !baseType.IsGenericTypeDefinition
+                ? baseType.GetGenericTypeDefinition()
+                : baseType;
+
+            foreach (var t in TypeCache.GetTypesDerivedFrom(query))
             {
-                var types = SafeGetTypes(asms[ai]);
-                for (int ti = 0; ti < types.Length; ti++)
+                if (t.IsAbstract || t.IsInterface || t.IsGenericTypeDefinition || !baseType.IsAssignableFrom(t)) continue;
+                if (StableRefTypeRegistry.GetOrAssignId(t) == null) continue;
+
+                var cat = t.GetCustomAttribute<StableRefCategoryAttribute>();
+                string catS = cat?.Category ?? "";
+                string fullPath = string.IsNullOrEmpty(catS) ? t.Name : $"{catS}/{t.Name}";
+
+                result.Add(new TypeEntry
                 {
-                    var t = types[ti];
-                    if (t.IsAbstract || t.IsInterface || !baseType.IsAssignableFrom(t)) continue;
+                    Type = t,
+                    Name = t.Name,
+                    FullPath = fullPath,
+                    FullPathLower = fullPath.ToLowerInvariant(),
+                    Category = catS
+                });
+            }
+            if (baseType.IsGenericType && !baseType.IsGenericTypeDefinition)
+            {
+                foreach (var closed in StableRefGenericUtils.CollectClosedGenericCandidates(baseType))
+                {
+                    if (StableRefTypeRegistry.GetOrAssignId(closed) == null) continue;
 
-                    if (StableRefTypeRegistry.GetOrAssignId(t) == null) continue;
-
-                    var cat = t.GetCustomAttribute<StableRefCategoryAttribute>();
-                    string catS = cat?.Category ?? "";
-                    string fullPath = string.IsNullOrEmpty(catS) ? t.Name : $"{catS}/{t.Name}";
+                    var gcat = closed.GetCustomAttribute<StableRefCategoryAttribute>();
+                    string gcatS = gcat?.Category ?? "";
+                    string gname = StableRefGenericUtils.DisplayName(closed);
+                    string gfullPath = string.IsNullOrEmpty(gcatS) ? gname : $"{gcatS}/{gname}";
 
                     result.Add(new TypeEntry
                     {
-                        Type = t,
-                        Name = t.Name,
-                        FullPath = fullPath,
-                        FullPathLower = fullPath.ToLowerInvariant(),
-                        Category = catS
+                        Type = closed,
+                        Name = gname,
+                        FullPath = gfullPath,
+                        FullPathLower = gfullPath.ToLowerInvariant(),
+                        Category = gcatS
                     });
                 }
             }
+
             result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
 
             var arr = result.ToArray();
             _typeCache[baseType] = arr;
             return arr;
+        }
+
+        private static bool TryGetValueFieldType(SerializedProperty property, out Type type)
+        {
+            type = null;
+            if (!TryResolvePath(property, out var r)) return false;
+            type = r.ValueType;
+            return type != null;
         }
 
         public static Type[] SafeGetTypes(Assembly a)
@@ -300,24 +331,28 @@ namespace SST.StableRef
                 
                 if (field == null && (currType.IsInterface || currType.IsAbstract))
                 {
-                    foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                    var query = currType.IsGenericType ? currType.GetGenericTypeDefinition() : currType;
+                    foreach (var concreteType in TypeCache.GetTypesDerivedFrom(query))
                     {
-                        Type[] asmTypes;
-                        try { asmTypes = asm.GetTypes(); }
-                        catch { continue; }
+                        if (concreteType.IsInterface) continue;
 
-                        foreach (var concreteType in asmTypes)
+                        Type candidate;
+                        if (concreteType.IsGenericTypeDefinition)
                         {
-                            if (concreteType.IsAbstract || concreteType.IsInterface) continue;
+                            if (!StableRefGenericUtils.TryClose(concreteType, currType, out candidate)) continue;
+                        }
+                        else
+                        {
+                            if (concreteType.IsAbstract) continue;
                             if (!currType.IsAssignableFrom(concreteType)) continue;
+                            candidate = concreteType;
+                        }
 
-                            var s = concreteType;
-                            while (s != null && field == null)
-                            {
-                                field = s.GetField(name, FieldFlags);
-                                s = s.BaseType;
-                            }
-                            if (field != null) break;
+                        var s = candidate;
+                        while (s != null && field == null)
+                        {
+                            field = s.GetField(name, FieldFlags);
+                            s = s.BaseType;
                         }
                         if (field != null) break;
                     }

@@ -54,12 +54,22 @@ namespace SST.StableRef
 
         private bool HasAnyResults => _roots != null && _roots.Any(r => r.Children.Count > 0);
 
+        private void OnEnable()
+        {
+            _roots = null;
+            _scanEntries.Clear();
+            _hasScanned = false;
+            _showDomainReloadHint = false;
+            _filter = "";
+            _selectedNode = null;
+        }
+
         private void OnGUI()
         {
             StableRefEditorUtility.EnsureStyles();
             DrawToolbar();
 
-            if (!_hasScanned)
+            if (!_hasScanned || _roots == null)
             {
                 EditorGUILayout.HelpBox(
                     "Press \"Scan Project\" to find objects with missing StableRef types.",
@@ -327,9 +337,15 @@ namespace SST.StableRef
             GUILayout.Space(4);
         }
 
+        private struct GroupSeg
+        {
+            public string Label;
+            public bool IsValue;
+        }
+
         private struct MissingRefInfo
         {
-            public string GroupLabel;
+            public GroupSeg[] GroupPath;
             public string TypeDisplayName;
             public string ResolvedName;
         }
@@ -394,10 +410,6 @@ namespace SST.StableRef
             Repaint();
         }
 
-        // Only reads scenes that are already open — never opens or closes anything. Opening every
-        // scene in the project additively was expensive on large projects and had side effects
-        // (e.g. triggering the engine's lighting auto-bake), so this only ever looks at what's
-        // already loaded in the editor.
         private void ScanActiveScenes()
         {
             for (int i = 0; i < SceneManager.sceneCount; i++)
@@ -474,11 +486,11 @@ namespace SST.StableRef
                 if (string.IsNullOrEmpty(displayName)) displayName = "?";
 
                 var recoveredType = StableRefTypeRegistry.GetType(typeIdProp.stringValue);
-                string resolvedName = recoveredType != null ? recoveredType.Name : "None";
+                string resolvedName = recoveredType != null ? StableRefGenericUtils.DisplayName(recoveredType) : "None";
 
                 result.Add(new MissingRefInfo
                 {
-                    GroupLabel = GetFieldGroupLabel(so, wrapperProp.propertyPath),
+                    GroupPath = GetFieldGroupPath(so, wrapperProp.propertyPath),
                     TypeDisplayName = displayName,
                     ResolvedName = resolvedName
                 });
@@ -487,10 +499,40 @@ namespace SST.StableRef
             return result;
         }
 
-        private static string GetFieldGroupLabel(SerializedObject so, string wrapperPath)
+        private static GroupSeg[] GetFieldGroupPath(SerializedObject so, string wrapperPath)
         {
-            string fieldPath = StableRefEditorUtility.StripStableRefListArraySuffix(wrapperPath);
-            return StableRefEditorUtility.BuildFieldDisplayPath(so, fieldPath);
+            if (string.IsNullOrEmpty(wrapperPath)) return Array.Empty<GroupSeg>();
+
+            var parts = new List<GroupSeg>();
+            var run = new List<string>();
+            var segs = wrapperPath.Split('.');
+            string accumulated = "";
+
+            for (int i = 0; i < segs.Length; i++)
+            {
+                string seg = segs[i];
+                accumulated = i == 0 ? seg : accumulated + "." + seg;
+
+                int bracket = seg.IndexOf('[');
+                string baseName = bracket >= 0 ? seg.Substring(0, bracket) : seg;
+                if (baseName == "_items" || baseName == "Array" || baseName == "data") continue;
+
+                var prop = so.FindProperty(accumulated);
+                if (prop == null) continue;
+
+                if (prop.propertyType == SerializedPropertyType.ManagedReference)
+                {
+                    if (run.Count > 0) { parts.Add(new GroupSeg { Label = string.Join("/", run) }); run.Clear(); }
+                    var v = prop.managedReferenceValue;
+                    if (v != null) parts.Add(new GroupSeg { Label = StableRefEditorUtility.ValueLabelPrefix + StableRefGenericUtils.DisplayName(v.GetType()), IsValue = true });
+                    continue;
+                }
+
+                run.Add(prop.displayName);
+            }
+
+            if (run.Count > 0) parts.Add(new GroupSeg { Label = string.Join("/", run) });
+            return parts.ToArray();
         }
 
         private void BuildTree()
@@ -569,32 +611,40 @@ namespace SST.StableRef
 
         private static void AddMissingRefNodes(Node compNode, List<MissingRefInfo> missingRefs, UnityEngine.Object pingTarget)
         {
+            var scriptIcon = EditorGUIUtility.IconContent("cs Script Icon").image;
             var groupNodes = new Dictionary<string, Node>();
 
             foreach (var r in missingRefs)
             {
                 Node parent = compNode;
+                string key = "";
 
-                if (r.GroupLabel != null)
+                if (r.GroupPath != null)
                 {
-                    if (!groupNodes.TryGetValue(r.GroupLabel, out var groupNode))
+                    for (int i = 0; i < r.GroupPath.Length; i++)
                     {
-                        groupNode = new Node
+                        var seg = r.GroupPath[i];
+                        key = key.Length == 0 ? seg.Label : key + "/" + seg.Label;
+                        if (!groupNodes.TryGetValue(key, out var groupNode))
                         {
-                            Kind = NodeKind.Item,
-                            Label = r.GroupLabel,
-                            PingTarget = pingTarget
-                        };
-                        groupNodes[r.GroupLabel] = groupNode;
-                        compNode.Children.Add(groupNode);
+                            groupNode = new Node
+                            {
+                                Kind = NodeKind.Item,
+                                Label = seg.Label,
+                                Icon = seg.IsValue ? scriptIcon : null,
+                                PingTarget = pingTarget
+                            };
+                            groupNodes[key] = groupNode;
+                            parent.Children.Add(groupNode);
+                        }
+                        parent = groupNode;
                     }
-                    parent = groupNode;
                 }
 
                 parent.Children.Add(new Node
                 {
                     Kind = NodeKind.Item,
-                    Label = $"Missing ({r.TypeDisplayName}) → {r.ResolvedName}",
+                    Label = $"{StableRefEditorUtility.ValueLabelPrefix}Missing ({r.TypeDisplayName}) → {r.ResolvedName}",
                     Icon = EditorGUIUtility.IconContent("console.warnicon.sml").image,
                     PingTarget = pingTarget
                 });
@@ -712,9 +762,6 @@ namespace SST.StableRef
 
             AssetDatabase.SaveAssets();
 
-            // Never opens or closes scenes — only fixes scene objects whose scene is already loaded.
-            // A scene found broken earlier but closed since then is skipped; open it and re-scan to
-            // fix it. This is what keeps Fix All Missings from ever touching scene load state.
             var byScene = entries.Where(n => n.IsSceneObject).GroupBy(n => n.AssetPath).ToList();
             int skippedScenes = 0;
             try
@@ -806,7 +853,7 @@ namespace SST.StableRef
                 {
                     valueProp.managedReferenceValue = Activator.CreateInstance(recoveredType);
                     StableRefHandler.RestoreBackup(wrapperProp, valueProp);
-                    if (dispProp != null) dispProp.stringValue = recoveredType.Name;
+                    if (dispProp != null) dispProp.stringValue = StableRefGenericUtils.DisplayName(recoveredType);
                 }
                 else
                 {
