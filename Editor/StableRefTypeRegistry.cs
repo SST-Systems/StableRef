@@ -133,6 +133,27 @@ namespace SST.StableRef
             _missingIds.Remove(id);
         }
 
+        [InitializeOnLoadMethod]
+        private static void WarnDuplicateStableIds()
+        {
+            var byId = new Dictionary<string, Type>();
+            foreach (var type in TypeCache.GetTypesWithAttribute<StableTypeIdAttribute>())
+            {
+                var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(StableTypeIdAttribute));
+                if (attr == null || string.IsNullOrEmpty(attr.Id)) continue;
+
+                if (byId.TryGetValue(attr.Id, out var first))
+                {
+                    Debug.LogError(
+                        $"[StableRef] Duplicate [StableTypeId(\"{attr.Id}\")] on '{first.FullName}' and '{type.FullName}'. IDs must be unique.");
+                }
+                else
+                {
+                    byId[attr.Id] = type;
+                }
+            }
+        }
+
         private const char GenOpen = '<';
         private const char GenClose = '>';
         private const char GenSep = ',';
