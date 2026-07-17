@@ -25,6 +25,7 @@ StableRef makes working with polymorphic serialized references stable and comfor
   - [Declaring a stable type](#declaring-a-stable-type)
   - [Using StableRef\<T\> in a field](#using-stablefrt-in-a-field)
   - [Using StableRefList\<T\>](#using-stablereflistt)
+  - [Generic value types](#generic-value-types)
 - [Auto-generated ID](#auto-generated-id)
 - [Editor tools](#editor-tools)
 - [Copying and pasting](#copying-and-pasting)
@@ -107,9 +108,24 @@ foreach (var stableRef in config.Effects)
 }
 ```
 
+`StableRefList<T>` also works like a `List<T>` from code — `Add`, `Insert`, `Remove`, `RemoveAt`, `RemoveAll`, `Clear`, `Contains`, `IndexOf`, `Find`, and so on:
+
+```csharp
+config.Effects.Add(new DamageOnHit { Amount = 5 });
+config.Effects.RemoveAll(e => e is DamageOnHit);
+```
+
+Indexing and `foreach` yield the `StableRef<T>` wrapper (read the value via `.Value`); the query and mutation helpers work with `T` directly. `Items` exposes the underlying `List<StableRef<T>>` for the full `List` API.
+
+When you build a list from an **editor script** rather than the inspector, call `StableRefSync.AssignIds(list)` before saving so the new entries receive their stable IDs (the inspector does this automatically when a field is drawn).
+
 <p align="center">
   <img src="Documentation~/inspector.gif" alt="Adding a type via the typed dropdown" width="580">
 </p>
+
+### Generic value types
+
+The selector also supports closed generic element types. For a field like `StableRefList<ICondition<Unit>>`, open generic definitions that satisfy it (e.g. `All<TContext>`, `Any<TContext>`) are offered and closed with the field's own argument (`All<Unit>`). Each type used as a generic argument needs its own stable ID — its own file, or `[StableTypeId]` — just like any other StableRef type.
 
 ---
 

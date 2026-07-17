@@ -11,7 +11,6 @@ namespace SST.StableRef
 {
     public sealed class StableRefUsagesWindow : EditorWindow
     {
-        private const float FilterW = 110f;
         private const float FindW = 90f;
         private const float SearchW = 160f;
         private const float ClearBtnW = 18f;
@@ -25,7 +24,6 @@ namespace SST.StableRef
             public NodeKind Kind;
             public string Label;
             public Texture Icon;
-            public Type BaseType;
             public Type ConcreteType;
             public UnityEngine.Object PingTarget;
             public string PrefabAssetPath;
@@ -38,8 +36,6 @@ namespace SST.StableRef
         private List<Node> _roots;
         private Vector2 _scroll;
         private string _searchText = "";
-        private Type _typeFilter;
-        private readonly List<Type> _availableTypes = new();
         private readonly HashSet<Node> _visibleNodes = new();
         private bool _visibilityDirty;
         private Node _selectedNode;
@@ -76,6 +72,15 @@ namespace SST.StableRef
             if (ms == null) return false;
             var type = ms.GetClass();
             return type != null && !type.IsAbstract && !type.IsInterface;
+        }
+
+        private void OnEnable()
+        {
+            _roots = null;
+            _searchText = "";
+            _visibleNodes.Clear();
+            _visibilityDirty = true;
+            _selectedNode = null;
         }
 
         private void OnGUI()
@@ -140,41 +145,11 @@ namespace SST.StableRef
                     Repaint();
                 }
 
-                string filterLabel = _typeFilter == null ? "All Types" : GetTypeDisplayName(_typeFilter);
-                EditorGUI.BeginDisabledGroup(_availableTypes.Count == 0);
-                if (EditorGUILayout.DropdownButton(new GUIContent(filterLabel), FocusType.Passive,
-                        EditorStyles.toolbarDropDown, GUILayout.Width(FilterW)))
-                    ShowTypeFilterMenu();
-                EditorGUI.EndDisabledGroup();
-
                 GUILayout.FlexibleSpace();
 
                 if (GUILayout.Button("Find Usages", EditorStyles.toolbarButton, GUILayout.Width(FindW)))
                     RunSearch();
             }
-        }
-
-        private void ShowTypeFilterMenu()
-        {
-            var menu = new GenericMenu();
-            menu.AddItem(new GUIContent("All Types"), _typeFilter == null, () =>
-            {
-                _typeFilter = null;
-                InvalidateVisibility();
-                Repaint();
-            });
-            menu.AddSeparator("");
-            foreach (var type in _availableTypes)
-            {
-                var t = type;
-                menu.AddItem(new GUIContent(GetTypeDisplayName(t)), _typeFilter == t, () =>
-                {
-                    _typeFilter = t;
-                    InvalidateVisibility();
-                    Repaint();
-                });
-            }
-            menu.ShowAsContext();
         }
 
         private void InvalidateVisibility() => _visibilityDirty = true;
@@ -209,7 +184,7 @@ namespace SST.StableRef
             {
                 bool textOk = string.IsNullOrEmpty(_searchText)
                     || node.Label.IndexOf(_searchText, StringComparison.OrdinalIgnoreCase) >= 0;
-                vis = textOk && (_typeFilter == null || node.BaseType == _typeFilter);
+                vis = textOk;
             }
             if (vis) _visibleNodes.Add(node);
             return vis;
@@ -352,10 +327,7 @@ namespace SST.StableRef
 
             var prevContent = GUI.contentColor;
             if (isSelected) GUI.contentColor = StableRefEditorUtility.SelectionTextColor;
-            string displayLabel = node.BaseType != null
-                ? $"{GetTypeDisplayName(node.BaseType)}: {node.Label}"
-                : node.Label;
-            GUI.Label(rect, new GUIContent(" " + displayLabel, node.Icon));
+            GUI.Label(rect, new GUIContent(" " + node.Label, node.Icon));
             GUI.contentColor = prevContent;
         }
 
@@ -369,8 +341,6 @@ namespace SST.StableRef
         private void RunSearch()
         {
             _roots = new List<Node>();
-            _typeFilter = null;
-            _availableTypes.Clear();
 
             var prefabGroup = new Node { Kind = NodeKind.Group, Label = "Prefabs" };
             var sceneGroup = new Node { Kind = NodeKind.Group, Label = "Active Scenes" };
@@ -388,7 +358,6 @@ namespace SST.StableRef
             _roots.Add(sceneGroup);
             _roots.Add(soGroup);
 
-            CollectAvailableTypes();
             InvalidateVisibility();
             Repaint();
         }
@@ -416,10 +385,6 @@ namespace SST.StableRef
             }
         }
 
-        // Only reads scenes that are already open — never opens or closes anything. Opening every
-        // scene in the project additively was expensive on large projects and had side effects
-        // (e.g. triggering the engine's lighting auto-bake), so this only ever looks at what's
-        // already loaded in the editor.
         private static void ScanScenes(Node group)
         {
             for (int i = 0; i < SceneManager.sceneCount; i++)
@@ -479,19 +444,6 @@ namespace SST.StableRef
                 };
                 assetNode.Children.Add(compNode);
                 group.Children.Add(assetNode);
-            }
-        }
-
-        private void CollectAvailableTypes() => CollectAvailableTypes(_roots);
-
-        private void CollectAvailableTypes(List<Node> nodes)
-        {
-            foreach (var node in nodes)
-            {
-                if (node.BaseType != null && !_availableTypes.Contains(node.BaseType))
-                    _availableTypes.Add(node.BaseType);
-                if (node.Children.Count > 0)
-                    CollectAvailableTypes(node.Children);
             }
         }
 
@@ -565,8 +517,7 @@ namespace SST.StableRef
                     && StableRefPropertyUtils.IsStableRefValueField(iter)
                     && iter.managedReferenceValue != null)
                 {
-                    var baseType = StableRefPropertyUtils.GetBaseType(iter);
-                    var itemNode = BuildItemNode(iter, pingTarget, baseType);
+                    var itemNode = BuildItemNode(iter, pingTarget);
                     if (itemNode != null)
                     {
                         string iterPath = iter.propertyPath;
@@ -600,12 +551,11 @@ namespace SST.StableRef
 
         private static Node BuildListNode(SerializedProperty arrayProp, UnityEngine.Object pingTarget, string label = null)
         {
-            var baseType = StableRefPropertyUtils.GetArrayElementBaseType(arrayProp);
             var node = new Node { Kind = NodeKind.Item, Label = label ?? arrayProp.displayName, PingTarget = pingTarget };
 
             for (int i = 0; i < arrayProp.arraySize; i++)
             {
-                var item = BuildItemNode(arrayProp.GetArrayElementAtIndex(i), pingTarget, baseType);
+                var item = BuildItemNode(arrayProp.GetArrayElementAtIndex(i), pingTarget);
                 if (item != null) node.Children.Add(item);
             }
 
@@ -614,7 +564,6 @@ namespace SST.StableRef
 
         private static Node BuildStableRefListNode(SerializedProperty arrayProp, UnityEngine.Object pingTarget, string label = null)
         {
-            var baseType = StableRefPropertyUtils.GetStableRefValueBaseType(arrayProp);
             var node = new Node { Kind = NodeKind.Item, Label = label ?? arrayProp.displayName, PingTarget = pingTarget };
 
             for (int i = 0; i < arrayProp.arraySize; i++)
@@ -623,14 +572,14 @@ namespace SST.StableRef
                 var valueProp = elem.FindPropertyRelative("Value");
                 if (valueProp == null || valueProp.managedReferenceValue == null) continue;
 
-                var item = BuildItemNode(valueProp, pingTarget, baseType);
+                var item = BuildItemNode(valueProp, pingTarget);
                 if (item != null) node.Children.Add(item);
             }
 
             return node.Children.Count > 0 ? node : null;
         }
 
-        private static Node BuildItemNode(SerializedProperty prop, UnityEngine.Object pingTarget, Type baseType)
+        private static Node BuildItemNode(SerializedProperty prop, UnityEngine.Object pingTarget)
         {
             var value = prop.managedReferenceValue;
             if (value == null) return null;
@@ -639,10 +588,9 @@ namespace SST.StableRef
             var node = new Node
             {
                 Kind = NodeKind.Item,
-                Label = type.Name,
+                Label = StableRefEditorUtility.ValueLabelPrefix + GetTypeDisplayName(type),
                 Icon = GetTypeIcon(type),
                 PingTarget = pingTarget,
-                BaseType = baseType,
                 ConcreteType = type
             };
 
@@ -663,7 +611,7 @@ namespace SST.StableRef
                 }
                 else if (iter.isArray && StableRefPropertyUtils.IsStableRefArray(iter))
                 {
-                    var sub = BuildStableRefListNode(iter, pingTarget);
+                    var sub = BuildStableRefListNode(iter, pingTarget, StableRefListFieldLabel(iter));
                     if (sub != null) node.Children.Add(sub);
                     enter = false;
                 }
@@ -674,6 +622,18 @@ namespace SST.StableRef
             }
 
             return node;
+        }
+
+        private static string StableRefListFieldLabel(SerializedProperty itemsArray)
+        {
+            const string suffix = "._items";
+            string path = itemsArray.propertyPath;
+            if (path.EndsWith(suffix, StringComparison.Ordinal))
+            {
+                var listProp = itemsArray.serializedObject.FindProperty(path.Substring(0, path.Length - suffix.Length));
+                if (listProp != null) return listProp.displayName;
+            }
+            return null;
         }
 
         private static void TagScenePath(Node node, string scenePath)
