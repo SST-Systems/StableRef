@@ -1,5 +1,11 @@
 # StableRef
 
+## 1.1.1 - 21.07.2026
+
+### Changed
+
+- asmdef rename
+
 ## 1.1.0 - 17.07.2026
 
 Generic types in the selector, a code-friendly `StableRefList`, and faster type discovery.
