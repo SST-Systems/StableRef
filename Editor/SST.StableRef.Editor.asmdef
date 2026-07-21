@@ -1,8 +1,12 @@
 {
-    "name": "StableRef",
-    "rootNamespace": "StableRef",
-    "references": [],
-    "includePlatforms": [],
+    "name": "SST.StableRef.Editor",
+    "rootNamespace": "SST.StableRef",
+    "references": [
+        "SST.StableRef"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,
