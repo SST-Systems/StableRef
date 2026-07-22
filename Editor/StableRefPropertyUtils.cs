@@ -50,6 +50,27 @@ namespace SST.StableRef
         public static SerializedProperty GetStableRefListItems(SerializedProperty property)
             => property.FindPropertyRelative("_items");
 
+        /// <summary>
+        /// Sets <paramref name="property"/> and every descendant that has visible children to the same
+        /// expanded state — the recursive foldout behaviour Unity applies when you Alt/Option-click a
+        /// foldout arrow. Mirrors Unity's internal <c>EditorGUI.SetExpandedRecurse</c>, so nested
+        /// StableRef / StableRefList fields (whose custom drawers read <c>isExpanded</c>) fold with it.
+        /// </summary>
+        public static void SetExpandedRecursive(SerializedProperty property, bool expanded)
+        {
+            if (property == null) return;
+
+            var search = property.Copy();
+            search.isExpanded = expanded;
+
+            int depth = search.depth;
+            while (search.NextVisible(true) && search.depth > depth)
+            {
+                if (search.hasVisibleChildren)
+                    search.isExpanded = expanded;
+            }
+        }
+
         public static bool IsStableRefArray(SerializedProperty property)
         {
             if (property == null || !property.isArray) return false;

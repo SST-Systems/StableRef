@@ -158,8 +158,17 @@ namespace SST.StableRef
             if (hasChildren)
             {
                 float foldoutX = hasLabel ? controlLine.x - 4f : controlLine.x;
-                property.isExpanded = EditorGUI.Foldout(
+                EditorGUI.BeginChangeCheck();
+                bool expanded = EditorGUI.Foldout(
                     new Rect(foldoutX, controlLine.y, FoldoutW, controlLine.height), property.isExpanded, GUIContent.none, true);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    if (ev.alt)
+                        StableRefPropertyUtils.SetExpandedRecursive(property, expanded);
+                    else
+                        property.isExpanded = expanded;
+                    StableRefListDrawer.InvalidateCache();
+                }
             }
 
             var btnRect = new Rect(btnX, controlLine.y, btnW, controlLine.height);

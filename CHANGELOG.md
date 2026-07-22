@@ -1,5 +1,15 @@
 # StableRef
 
+## 1.1.2 - 22.07.2026
+
+### Added
+
+- **Alt/Option-click recursively expands or collapses** a `StableRef` value or `StableRefList`, matching Unity's built-in foldout behaviour. Holding Alt while toggling a foldout now applies the same expanded state to every nested field, including `StableRef` / `StableRefList` elements deeper inside — previously only the clicked foldout reacted.
+
+### Fixed
+
+- Expanding or collapsing a foldout inside a `StableRefList` no longer leaves the inspector showing the old layout until an unrelated event redraws it. Unity's `ReorderableList` caches its height and only recomputes it on add/remove or a control-count change — not when a nested foldout resizes an element — and the drawer reused cached lists, so the stale height survived even a full repaint. Toggling any StableRef / StableRefList foldout now invalidates those cached lists so they re-measure immediately.
+
 ## 1.1.1 - 21.07.2026
 
 ### Changed
