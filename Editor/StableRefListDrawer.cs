@@ -11,6 +11,15 @@ namespace SST.StableRef
     {
         private static readonly Dictionary<(int, string), ReorderableList> _cache = new();
 
+        /// <summary>
+        /// Drops the cached <see cref="ReorderableList"/> instances so they are rebuilt on the next
+        /// repaint. Unity's ReorderableList caches its own height and only recomputes it on add /
+        /// remove or a control-count change — not when a nested foldout resizes an element — so a
+        /// reused list keeps reporting a stale height after an expand/collapse. Call this whenever a
+        /// StableRef / StableRefList foldout is toggled so the affected lists re-measure.
+        /// </summary>
+        internal static void InvalidateCache() => _cache.Clear();
+
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
             var itemsProp = property.FindPropertyRelative("_items");
@@ -33,7 +42,16 @@ namespace SST.StableRef
             }
             else
             {
-                property.isExpanded = EditorGUI.Foldout(headerRect, property.isExpanded, label, true);
+                EditorGUI.BeginChangeCheck();
+                bool expanded = EditorGUI.Foldout(headerRect, property.isExpanded, label, true);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    if (ev.alt)
+                        StableRefPropertyUtils.SetExpandedRecursive(property, expanded);
+                    else
+                        property.isExpanded = expanded;
+                    InvalidateCache();
+                }
             }
 
             if (property.isExpanded)
