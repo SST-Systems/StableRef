@@ -5,7 +5,16 @@ using UnityEngine;
 
 namespace SST.StableRef
 {
-    internal static class StableRefContextMenu
+    /// <summary>
+    /// Copy / paste and clear commands for StableRef entries and lists, both as the right-click menu of an entry
+    /// and as the entries Unity appends to its own property context menu.
+    /// </summary>
+    /// <remarks>
+    /// Public so an inspector integration that draws StableRef fields itself can open the same menu instead of
+    /// leaving its users without copy / paste. <see cref="ShowDirectMenu"/> takes the <c>Value</c> property of an
+    /// entry, <see cref="ShowListMenu"/> takes the backing array of a list.
+    /// </remarks>
+    public static class StableRefContextMenu
     {
         [InitializeOnLoadMethod]
         private static void Register()

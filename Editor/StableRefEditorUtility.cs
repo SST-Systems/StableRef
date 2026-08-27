@@ -6,7 +6,15 @@ using UnityEngine;
 
 namespace SST.StableRef
 {
-    internal static class StableRefEditorUtility
+    /// <summary>
+    /// Shared editor helpers behind the StableRef inspector and its tool windows: label building, the styles the
+    /// windows draw with, and jumping to the script that declares a value type.
+    /// </summary>
+    /// <remarks>
+    /// Public so an inspector integration can reuse them rather than reimplement them — in particular
+    /// <see cref="PingScript"/>, which every StableRef field offers as a button next to its type selector.
+    /// </remarks>
+    public static class StableRefEditorUtility
     {
         public const float ArrowW = 14f;
 

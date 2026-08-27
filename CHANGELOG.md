@@ -1,5 +1,15 @@
 # StableRef
 
+## 1.2.0 - 18.08.2026
+
+### Added
+
+- **`StableRefBackup`** — public entry point to the value snapshot an entry keeps next to its managed reference (`ValuesData`, `ObjectRefs`, `ObjectRefPaths`). `Capture` refreshes it from the current value, `Restore` replays it onto the value. The built-in drawer keeps maintaining the snapshot on its own, so nothing changes for ordinary usage; the API exists for inspector integrations that draw StableRef entries themselves and take over that responsibility — without it, a reference recovered after a rename would be restored from data captured before the last edits.
+
+### Changed
+
+- **`StableRefContextMenu` and `StableRefEditorUtility` are now public.** Both were internal, which left an inspector integration unable to reuse them: copy / paste / clear of entries and lists lives entirely in `StableRefContextMenu`, and the jump-to-script button next to every type selector lives in `StableRefEditorUtility.PingScript`. Reimplementing either outside the package would either drop the feature or duplicate it. No behaviour changed.
+
 ## 1.1.2 - 22.07.2026
 
 ### Added
