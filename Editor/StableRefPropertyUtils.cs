@@ -233,6 +233,7 @@ namespace SST.StableRef
             foreach (var t in TypeCache.GetTypesDerivedFrom(query))
             {
                 if (t.IsAbstract || t.IsInterface || t.IsGenericTypeDefinition || !baseType.IsAssignableFrom(t)) continue;
+                if (!IsInstantiableReferenceValue(t)) continue;
                 if (StableRefTypeRegistry.GetOrAssignId(t) == null) continue;
 
                 var cat = t.GetCustomAttribute<StableRefCategoryAttribute>();
@@ -252,6 +253,7 @@ namespace SST.StableRef
             {
                 foreach (var closed in StableRefGenericUtils.CollectClosedGenericCandidates(baseType))
                 {
+                    if (!IsInstantiableReferenceValue(closed)) continue;
                     if (StableRefTypeRegistry.GetOrAssignId(closed) == null) continue;
 
                     var gcat = closed.GetCustomAttribute<StableRefCategoryAttribute>();
@@ -275,6 +277,19 @@ namespace SST.StableRef
             var arr = result.ToArray();
             _typeCache[baseType] = arr;
             return arr;
+        }
+
+        /// <summary>
+        /// True when <paramref name="t"/> can actually live in a <c>[SerializeReference]</c> field:
+        /// a non-UnityEngine.Object reference type with a parameterless constructor.
+        /// </summary>
+        private static bool IsInstantiableReferenceValue(Type t)
+        {
+            if (t.IsValueType) return false;
+            if (typeof(UnityEngine.Object).IsAssignableFrom(t)) return false;
+            return t.GetConstructor(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                binder: null, Type.EmptyTypes, modifiers: null) != null;
         }
 
         private static bool TryGetValueFieldType(SerializedProperty property, out Type type)
@@ -438,11 +453,10 @@ namespace SST.StableRef
                     }
                 }
                 
+                // Failures are not cached: the concrete type behind a [SerializeReference] element can
+                // change while the inspector is open, making an earlier failed resolution valid later.
                 if (field == null)
-                {
-                    _pathCache[key] = default;
                     return false;
-                }
 
                 rawType = field.FieldType;
                 currType = rawType;
@@ -496,17 +510,34 @@ namespace SST.StableRef
                     ManagedRefPrefix.Length,
                     propertyType.Length - ManagedRefPrefix.Length - 1);
 
+                Type first = null;
                 var asms = AppDomain.CurrentDomain.GetAssemblies();
                 for (int ai = 0; ai < asms.Length; ai++)
                 {
                     var types = SafeGetTypes(asms[ai]);
                     for (int ti = 0; ti < types.Length; ti++)
-                        if (types[ti].Name == typeName) return types[ti];
+                    {
+                        if (types[ti].Name != typeName) continue;
+                        if (first == null)
+                        {
+                            first = types[ti];
+                        }
+                        else if (first != types[ti] && _ambiguousShortNames.Add(typeName))
+                        {
+                            Debug.LogWarning(
+                                $"[StableRef] Several types share the short name '{typeName}' " +
+                                $"('{first.FullName}', '{types[ti].FullName}', ...). Using '{first.FullName}' " +
+                                "as the field's base type — results may be wrong for the others.");
+                        }
+                    }
                 }
+                if (first != null) return first;
             }
 
             return typeof(object);
         }
+
+        private static readonly HashSet<string> _ambiguousShortNames = new();
     }
 }
 #endif

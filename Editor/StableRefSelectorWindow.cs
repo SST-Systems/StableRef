@@ -41,7 +41,9 @@ namespace SST.StableRef
             set => EditorPrefs.SetBool(PrefShowCategory, value);
         }
 
-        private SerializedProperty _property;
+        private UnityEngine.Object[] _targets;
+        private string _valuePath;
+        private Type _currentType;
         private StableRefPropertyUtils.TypeEntry[] _entries;
         private string _search = "";
         private int _hoveredIndex = -1;
@@ -114,7 +116,9 @@ namespace SST.StableRef
         public static void Show(Rect btnRect, SerializedProperty property, StableRefPropertyUtils.TypeEntry[] entries)
         {
             var win = CreateInstance<StableRefSelectorWindow>();
-            win._property = property;
+            win._targets = property.serializedObject.targetObjects;
+            win._valuePath = property.propertyPath;
+            win._currentType = property.managedReferenceValue?.GetType();
             win._entries = entries;
             win.RebuildRows();
 
@@ -128,7 +132,7 @@ namespace SST.StableRef
 
         private void OnGUI()
         {
-            if (_property == null) { Close(); return; }
+            if (_targets == null || _targets.Length == 0 || _targets[0] == null) { Close(); return; }
 
             if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
             { Close(); Event.current.Use(); return; }
@@ -231,7 +235,7 @@ namespace SST.StableRef
             int clicked = -1;
             float y = listY;
             var mp = Event.current.mousePosition;
-            Type currentType = _property.managedReferenceValue?.GetType();
+            Type currentType = _currentType;
 
             for (int i = 0; i < _rows.Count; i++)
             {
@@ -282,17 +286,20 @@ namespace SST.StableRef
             bool inR = r.Contains(mp);
             bool current = !row.IsNone && currentType != null && currentType == row.Entry?.Type;
 
-            if (inR) _hoveredIndex = index;
+            if (inR && (Event.current.type == EventType.MouseMove || Event.current.type == EventType.MouseDown))
+                _hoveredIndex = index;
+
+            bool hovered = index == _hoveredIndex;
 
             if (Event.current.type == EventType.Repaint)
             {
-                if (inR) _selectionRect.Draw(r, false, false, true, true);
+                if (hovered) _selectionRect.Draw(r, false, false, true, true);
                 else if (current) EditorGUI.DrawRect(r, _currentColor);
             }
 
             EditorGUI.LabelField(
                 new Rect(r.x + TextX + row.Depth * Indent, r.y, r.width - TextX - row.Depth * Indent - 2f, r.height),
-                row.Label, (inR || current) ? EditorStyles.whiteLabel : EditorStyles.label);
+                row.Label, (hovered || current) ? EditorStyles.whiteLabel : EditorStyles.label);
 
             if (inR && Event.current.type == EventType.MouseDown)
             { clicked = index; Event.current.Use(); }
@@ -315,7 +322,9 @@ namespace SST.StableRef
         private void ResizeWindow(float w, float h)
         {
             var anchor = new Rect(_anchorScreen.x, _anchorScreen.y, w, 0f);
-            var property = _property;
+            var targets = _targets;
+            var valuePath = _valuePath;
+            var currentType = _currentType;
             var entries = _entries;
             var search = _search;
             var collapsed = new HashSet<string>(_collapsed);
@@ -324,7 +333,9 @@ namespace SST.StableRef
             {
                 Close();
                 var win = CreateInstance<StableRefSelectorWindow>();
-                win._property = property;
+                win._targets = targets;
+                win._valuePath = valuePath;
+                win._currentType = currentType;
                 win._entries = entries;
                 win._search = search;
                 win._anchorScreen = anchor;
@@ -359,7 +370,19 @@ namespace SST.StableRef
                 case KeyCode.UpArrow: nextSel = cur < 0 ? selCount - 1 : Mathf.Clamp(cur - 1, 0, selCount - 1); break;
                 case KeyCode.Return:
                 case KeyCode.KeypadEnter:
-                    if (_hoveredIndex >= 0 && _hoveredIndex < count) SelectRow(_rows[_hoveredIndex]);
+                    if (_hoveredIndex >= 0 && _hoveredIndex < count)
+                    {
+                        SelectRow(_rows[_hoveredIndex]);
+                    }
+                    else if (!string.IsNullOrWhiteSpace(_search))
+                    {
+                        for (int i = 0; i < count; i++)
+                        {
+                            if (_rows[i].IsHeader || _rows[i].IsNone) continue;
+                            SelectRow(_rows[i]);
+                            break;
+                        }
+                    }
                     Event.current.Use();
                     return;
                 default: return;
@@ -389,21 +412,61 @@ namespace SST.StableRef
         {
             if (row.IsHeader) return;
 
-            string path = _property.propertyPath;
+            string path = _valuePath;
             bool expand = !row.IsNone;
 
-            foreach (var target in _property.serializedObject.targetObjects)
+            foreach (var target in _targets)
             {
+                if (target == null) continue;
+
                 var so = new SerializedObject(target);
                 so.Update();
                 var prop = so.FindProperty(path);
                 if (prop == null) continue;
-                prop.managedReferenceValue = row.IsNone ? null : Activator.CreateInstance(row.Entry.Type);
+
+                var wrapper = WrapperOf(so, path);
+
+                if (row.IsNone)
+                {
+                    if (wrapper != null) StableRefEntry.Clear(wrapper);
+                    else prop.managedReferenceValue = null;
+                }
+                else
+                {
+                    var instance = CreateInstanceSafe(row.Entry.Type);
+                    if (instance == null) continue;
+                    prop.managedReferenceValue = instance;
+                    if (wrapper != null) StableRefEntry.Sync(wrapper);
+                }
+
                 prop.isExpanded = expand;
                 so.ApplyModifiedProperties();
             }
 
             Close();
+        }
+
+        private static SerializedProperty WrapperOf(SerializedObject so, string valuePath)
+        {
+            const string valueSuffix = ".Value";
+            if (!valuePath.EndsWith(valueSuffix, StringComparison.Ordinal)) return null;
+
+            var wrapper = so.FindProperty(valuePath.Substring(0, valuePath.Length - valueSuffix.Length));
+            if (wrapper == null || wrapper.FindPropertyRelative("TypeId") == null) return null;
+            return wrapper;
+        }
+
+        private static object CreateInstanceSafe(Type type)
+        {
+            try
+            {
+                return Activator.CreateInstance(type, nonPublic: true);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[StableRef] Could not instantiate '{type.FullName}': {e.Message}");
+                return null;
+            }
         }
 
         private void RebuildRows()
