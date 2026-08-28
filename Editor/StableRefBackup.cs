@@ -35,7 +35,7 @@ namespace SST.StableRef
                 return;
             }
 
-            StableRefHandler.SnapshotBackup(entryProperty, valueProperty);
+            StableRefSnapshotCodec.Capture(entryProperty, valueProperty);
         }
 
         /// <summary>
@@ -53,7 +53,7 @@ namespace SST.StableRef
                 return;
             }
 
-            StableRefHandler.RestoreBackup(entryProperty, valueProperty);
+            StableRefSnapshotCodec.Restore(entryProperty, valueProperty);
         }
 
         private static bool TryGetValueProperty(SerializedProperty entryProperty, out SerializedProperty valueProperty)
