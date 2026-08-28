@@ -58,6 +58,11 @@ namespace SST.StableRef
                 menu.AddSeparator("");
                 menu.AddItem(new GUIContent("Set to None"), false, () => SetNone(prop));
             }
+            else if (IsMissingEntry(prop))
+            {
+                menu.AddSeparator("");
+                menu.AddItem(new GUIContent("Clear Entry"), false, () => ClearEntry(prop));
+            }
 
             menu.ShowAsContext();
         }
@@ -81,6 +86,8 @@ namespace SST.StableRef
                 AddItem(menu, "StableRef/Duplicate", hasValue && isInArray, () => DuplicateValue(prop));
                 if (hasValue)
                     menu.AddItem(new GUIContent("StableRef/Set to None"), false, () => SetNone(prop));
+                else if (IsMissingEntry(prop))
+                    menu.AddItem(new GUIContent("StableRef/Clear Entry"), false, () => ClearEntry(prop));
                 return;
             }
             
@@ -154,6 +161,10 @@ namespace SST.StableRef
                 prop.managedReferenceValue = clone;
                 prop.isExpanded = true;
                 RestoreObjectReferences(prop, StableRefClipboard.ValueObjectRefs);
+
+                var wrapper = WrapperOf(so, path);
+                if (wrapper != null) StableRefEntry.Sync(wrapper);
+
                 so.ApplyModifiedProperties();
             }
         }
@@ -176,10 +187,23 @@ namespace SST.StableRef
 
             array.InsertArrayElementAtIndex(index + 1);
             var inserted = array.GetArrayElementAtIndex(index + 1);
-            inserted.managedReferenceValue = copy;
-            inserted.isExpanded = property.isExpanded;
+
+            // For a StableRef list the array element is the wrapper — the managed reference
+            // lives in its "Value" child; for a plain [SerializeReference] list it is the
+            // element itself.
+            var insertedValue = inserted.propertyType == SerializedPropertyType.ManagedReference
+                ? inserted
+                : inserted.FindPropertyRelative("Value");
+            if (insertedValue == null || insertedValue.propertyType != SerializedPropertyType.ManagedReference)
+                return;
+
+            insertedValue.managedReferenceValue = copy;
+            insertedValue.isExpanded = property.isExpanded;
 
             CopyObjectReferences(originalSnapshot, inserted);
+
+            if (!ReferenceEquals(inserted, insertedValue))
+                StableRefEntry.Sync(inserted);
 
             so.ApplyModifiedProperties();
         }
@@ -208,11 +232,64 @@ namespace SST.StableRef
 
         private static void SetNone(SerializedProperty property)
         {
-            var so = property.serializedObject;
-            so.Update();
-            property.managedReferenceValue = null;
-            property.isExpanded = false;
-            so.ApplyModifiedProperties();
+            string valuePath = property.propertyPath;
+
+            foreach (var target in property.serializedObject.targetObjects)
+            {
+                var so = new SerializedObject(target);
+                so.Update();
+
+                var wrapper = WrapperOf(so, valuePath);
+                if (wrapper != null)
+                {
+                    StableRefEntry.Clear(wrapper);
+                }
+                else
+                {
+                    var prop = so.FindProperty(valuePath);
+                    if (prop == null) continue;
+                    prop.managedReferenceValue = null;
+                }
+
+                var valueProp = so.FindProperty(valuePath);
+                if (valueProp != null) valueProp.isExpanded = false;
+
+                so.ApplyModifiedProperties();
+            }
+        }
+
+        private static void ClearEntry(SerializedProperty valueProperty)
+        {
+            string valuePath = valueProperty.propertyPath;
+
+            foreach (var target in valueProperty.serializedObject.targetObjects)
+            {
+                var so = new SerializedObject(target);
+                so.Update();
+
+                var wrapper = WrapperOf(so, valuePath);
+                if (wrapper == null) continue;
+
+                StableRefEntry.Clear(wrapper);
+                so.ApplyModifiedProperties();
+                EditorUtility.SetDirty(target);
+            }
+        }
+
+        private static SerializedProperty WrapperOf(SerializedObject so, string valuePath)
+        {
+            const string valueSuffix = ".Value";
+            if (!valuePath.EndsWith(valueSuffix, System.StringComparison.Ordinal)) return null;
+
+            var wrapper = so.FindProperty(valuePath.Substring(0, valuePath.Length - valueSuffix.Length));
+            if (wrapper == null || wrapper.FindPropertyRelative("TypeId") == null) return null;
+            return wrapper;
+        }
+
+        private static bool IsMissingEntry(SerializedProperty valueProperty)
+        {
+            var wrapper = WrapperOf(valueProperty.serializedObject, valueProperty.propertyPath);
+            return wrapper != null && StableRefEntry.IsMissing(wrapper);
         }
 
         private static void CopyList(SerializedProperty arrayProp)
@@ -292,8 +369,7 @@ namespace SST.StableRef
                     SerializedProperty valueProp;
                     if (isStable)
                     {
-                        var typeIdP = inserted.FindPropertyRelative("TypeId");
-                        if (typeIdP != null) typeIdP.stringValue = string.Empty;
+                        StableRefEntry.Clear(inserted);
                         valueProp = inserted.FindPropertyRelative("Value");
                         if (valueProp == null) continue;
                         valueProp.managedReferenceValue = clone;
@@ -306,6 +382,9 @@ namespace SST.StableRef
 
                     if (i < clip.ObjectRefs.Count)
                         RestoreObjectReferences(valueProp, clip.ObjectRefs[i]);
+
+                    if (isStable)
+                        StableRefEntry.Sync(inserted);
                 }
 
                 so.ApplyModifiedProperties();
