@@ -23,8 +23,31 @@ namespace SST.StableRef
         public static readonly Color SelectionColor = new Color(0.17f, 0.44f, 0.75f, 0.8f);
         public static readonly Color SelectionTextColor = Color.white;
 
-        private static Texture _goIcon;
-        public static Texture GoIcon => _goIcon ??= EditorGUIUtility.IconContent("d_GameObject Icon").image;
+        private static readonly Dictionary<(string, bool), GUIContent> _iconCache = new();
+
+        /// <summary>
+        /// Skin-correct editor icon: tries <paramref name="name"/>, then the same name with the
+        /// <c>d_</c> (dark-skin) prefix toggled, then falls back to <paramref name="fallbackText"/>.
+        /// <see cref="EditorGUIUtility.IconContent(string)"/> never returns null — on the wrong skin it
+        /// returns content with a null image, which draws as a blank button.
+        /// </summary>
+        public static GUIContent Icon(string name, string fallbackText = "")
+        {
+            var key = (name, EditorGUIUtility.isProSkin);
+            if (_iconCache.TryGetValue(key, out var cached)) return cached;
+
+            var content = EditorGUIUtility.IconContent(name);
+            if (content?.image == null)
+            {
+                string alt = name.StartsWith("d_", StringComparison.Ordinal) ? name.Substring(2) : "d_" + name;
+                content = EditorGUIUtility.IconContent(alt);
+            }
+            if (content?.image == null) content = new GUIContent(fallbackText);
+
+            return _iconCache[key] = content;
+        }
+
+        public static Texture GoIcon => Icon("d_GameObject Icon").image;
 
         public static GUIStyle FoldoutStyle { get; private set; }
         public static GUIStyle HeaderStyle { get; private set; }

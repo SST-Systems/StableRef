@@ -103,7 +103,7 @@ namespace SST.StableRef
             _selectionRect = GUI.skin.FindStyle("SelectionRect") ?? GUI.skin.box;
             _prDisabledLabel = GUI.skin.FindStyle("PR DisabledLabel") ?? EditorStyles.centeredGreyMiniLabel;
             _greyBorder = GUI.skin.FindStyle("grey_border") ?? GUIStyle.none;
-            _gearContent = EditorGUIUtility.IconContent("d_Settings") ?? new GUIContent("=");
+            _gearContent = StableRefEditorUtility.Icon("d_Settings", "=");
 
             _borderColor = new Color(0.10f, 0.10f, 0.10f, 1.00f);
             _separatorColor = new Color(0.00f, 0.00f, 0.00f, 0.30f);

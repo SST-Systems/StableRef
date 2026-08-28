@@ -49,7 +49,7 @@ namespace SST.StableRef
 
                 bool prev = GUI.enabled;
                 GUI.enabled = true;
-                if (GUI.Button(btnRect, EditorGUIUtility.IconContent("d_Search Icon"), PingStyle))
+                if (GUI.Button(btnRect, StableRefEditorUtility.Icon("d_Search Icon"), PingStyle))
                     StableRefEditorUtility.PingScript(valueProp.managedReferenceValue?.GetType());
                 GUI.enabled = prev;
             }

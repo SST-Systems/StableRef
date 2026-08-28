@@ -559,7 +559,7 @@ namespace SST.StableRef
                         ? (string.IsNullOrEmpty(firstEntry.SceneName) ? "Untitled" : firstEntry.SceneName)
                         : System.IO.Path.GetFileNameWithoutExtension(assetPath),
                     Icon = isScene
-                        ? EditorGUIUtility.IconContent("d_SceneAsset Icon").image
+                        ? StableRefEditorUtility.Icon("d_SceneAsset Icon").image
                         : AssetDatabase.GetCachedIcon(assetPath),
                     PingTarget = assetObject,
                     AssetPath = assetPath
