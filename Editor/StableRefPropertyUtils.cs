@@ -285,6 +285,65 @@ namespace SST.StableRef
             return type != null;
         }
 
+        private static readonly Dictionary<Type, bool> _mayContainStableRef = new();
+
+        /// <summary>
+        /// Fast, cached answer to "can serialized data of this type possibly contain a StableRef entry?"
+        /// Walks the declared serializable field graph. Conservative: unknown or too-deep shapes
+        /// (including any <c>[SerializeReference]</c> field, whose runtime contents are open-ended)
+        /// count as true, so a false result is a safe reason to skip scanning an object.
+        /// </summary>
+        public static bool MayContainStableRef(Type rootType)
+        {
+            if (rootType == null) return false;
+            if (_mayContainStableRef.TryGetValue(rootType, out var cached)) return cached;
+
+            bool result = MayContainStableRefRecursive(rootType, new HashSet<Type>(), depth: 0);
+            _mayContainStableRef[rootType] = result;
+            return result;
+        }
+
+        private const int MayContainMaxDepth = 8;
+
+        private static bool MayContainStableRefRecursive(Type type, HashSet<Type> visited, int depth)
+        {
+            if (depth > MayContainMaxDepth) return true;
+            if (!visited.Add(type)) return false;
+
+            for (var t = type; t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var field in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic
+                                                  | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    if (field.IsDefined(typeof(NonSerializedAttribute), inherit: false)) continue;
+
+                    bool serializeReference = field.IsDefined(typeof(UnityEngine.SerializeReference), inherit: false);
+                    bool serialized = field.IsPublic
+                                      || serializeReference
+                                      || field.IsDefined(typeof(SerializeField), inherit: false);
+                    if (!serialized) continue;
+                    if (serializeReference) return true;
+
+                    var fieldType = field.FieldType;
+                    if (fieldType.IsArray) fieldType = fieldType.GetElementType();
+                    else if (fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() == typeof(List<>))
+                        fieldType = fieldType.GetGenericArguments()[0];
+                    if (fieldType == null) continue;
+
+                    if (typeof(StableRefBase).IsAssignableFrom(fieldType)) return true;
+                    if (typeof(StableRefListBase).IsAssignableFrom(fieldType)) return true;
+
+                    if (fieldType.IsPrimitive || fieldType.IsEnum || fieldType == typeof(string)) continue;
+                    if (typeof(UnityEngine.Object).IsAssignableFrom(fieldType)) continue;
+                    if (!fieldType.IsSerializable) continue;
+
+                    if (MayContainStableRefRecursive(fieldType, visited, depth + 1)) return true;
+                }
+            }
+
+            return false;
+        }
+
         public static Type[] SafeGetTypes(Assembly a)
         {
             try { return a.GetTypes(); }
