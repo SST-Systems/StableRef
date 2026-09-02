@@ -29,6 +29,7 @@ StableRef makes working with polymorphic serialized references stable and comfor
 - [Auto-generated ID](#auto-generated-id)
 - [Editor tools](#editor-tools)
 - [Copying and pasting](#copying-and-pasting)
+- [Upgrading to 2.0](#upgrading-to-20)
 - [License](#license)
 
 </details>
@@ -161,6 +162,10 @@ All tools are available under **Tools → StableRef** in the Unity menu bar.
   <img src="Documentation~/fix-missing.gif" alt="Fix Missing Types window" width="560">
 </p>
 
+**What recovery restores.** Each entry keeps a snapshot of its value next to the managed reference. Recovery after a rename/re-creation restores nested structs, arrays and lists, hidden serialized fields, `UnityEngine.Object` references anywhere in the value, and StableRef entries nested inside it (fixed in passes). Not captured — these come back as the new instance's defaults: `AnimationCurve`, `Gradient`, `Hash128`, `ExposedReference`, fixed buffers.
+
+Entries whose ID cannot be resolved are **skipped and kept** by Fix All (restore the type or its `[StableTypeId]` and re-run); discard one deliberately via right-click → **Clear Entry**.
+
 ---
 
 ## Copying and pasting
@@ -188,6 +193,14 @@ This is safe across GameObjects, prefabs, and scenes: instead of copying raw ser
 When copying a component that contains `StableRef` fields between a scene and a prefab, use this menu for the StableRef fields specifically rather than Unity's native Copy Component / Paste Component Values.
 
 > **Warning:** even with this menu available, stay cautious. `[SerializeReference]`-based fields (including `StableRef`/`StableRefList`) don't always copy or move as expected, even during trivial built-in Unity operations — Duplicate, drag & drop in the Hierarchy, applying/reverting prefab overrides, scene/prefab merges, and similar actions. Commit or back up your work before bulk changes, and double-check the result afterward.
+
+---
+
+## Upgrading to 2.0
+
+- Snapshots written by 2.0 use a `#v2` format that 1.x cannot read; 2.0 still reads 1.x data. Inspector integrations should migrate their private TypeId/missing/clear logic to the public `StableRefEntry` API (`Sync` / `Clear` / `IsMissing` / `TryRecreate`).
+- Consumers gating on the package version must widen their range — e.g. the Tri Inspector integration asmdef's `versionDefines` entry becomes `{"name": "com.sst-systems.stableref", "expression": "[2.0.0,3.0)", "define": "TRIINSPECTOR_STABLEREF"}`.
+- **Fix All** no longer wipes entries whose ID doesn't resolve (they're kept for later recovery; use **Clear Entry** to discard) and marks fixed scenes dirty instead of saving them.
 
 ---
 

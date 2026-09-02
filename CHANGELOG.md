@@ -1,5 +1,40 @@
 # StableRef
 
+## 2.0.0 - 28.08.2026
+
+### Breaking
+
+- **Snapshot format v2.** `ValuesData` written by 2.0 starts with a `#v2` header; 1.x cannot read it. 2.0 still restores 1.x snapshots (including their enum-by-index encoding).
+- **Fix All no longer wipes unresolvable entries.** An entry whose stable id doesn't resolve is skipped with a summary warning and keeps all its recovery data; discarding one is now an explicit action (right-click → **Clear Entry**).
+- **The drawer no longer auto-clears TypeId** when it notices a value went null (`_hadValue` heuristic removed, along with `StableRefHandler.ClearHadValue`). Every built-in path that empties an entry clears its metadata explicitly; entries emptied by external code without metadata cleanup now show up in the Fix Missing Types scan instead of being silently wiped — use **Clear Entry** or `StableRefEntry.Clear` there.
+- **Version-gated consumers must widen their range.** The Tri Inspector integration's asmdef `versionDefines` entry for `com.sst-systems.stableref` must change its expression from `[1.2.0,2.0)` to `[2.0.0,3.0)` — until it does, the `TRIINSPECTOR_STABLEREF` define stays off and the integration is simply not compiled.
+
+### Added
+
+- **`StableRefEntry`** — public entry-level API for inspector integrations and editor scripts: `Sync`, `Clear`, `IsMissing`, `TryRecreate`, `BuildMissingLabel`/`BuildMissingLabelText`, `MissingLabelColor`, and the serialized field-name constants. Integrations that reimplemented TypeId syncing, missing detection or entry clearing (e.g. the Tri Inspector layer's `SyncSerializedTypeId` / `IsMissingReference` / `ClearStableTypeId` and its held-value mirror) should migrate to these.
+- **Recursive snapshot/restore.** Rename recovery now restores nested structs, arrays and lists (sizes and elements), hidden serialized fields, and `UnityEngine.Object` references anywhere in the value — previously only the value's top-level primitive fields and object references survived. StableRef entries nested inside a recovered value are recovered too: fixing runs in passes until nothing is left to recreate. Not captured (restored as defaults): `AnimationCurve`, `Gradient`, `Hash128`, `ExposedReference`, fixed buffers.
+- **Clear Entry** context-menu item on missing entries — the deliberate way to discard an unresolvable entry and its recovery data.
+- The Fix Missing Types scan detects entries with a stored TypeId and no value even when Unity's native missing-type flag is absent (ghost entries), and both tool windows have cancelable progress bars.
+
+### Fixed
+
+- **Duplicate** on a `StableRefList` element threw an exception (it wrote the managed reference onto the wrapper element itself) — the only kind of element the menu is offered on. It now duplicates correctly and stamps the copy's metadata.
+- **Multi-object editing:** picking a type or **Set to None** applies value and metadata together per selected target — no more `Missing (X)` ghosts on secondary targets.
+- **List paste** left the neighbor element's duplicated snapshot data (`TypeDisplayName`, `ObjectRefs`, `ValuesData`) on inserted elements; entries are fully reset and re-stamped.
+- **GUID→`[StableTypeId]` migration** no longer depends on what touched the type first: the attribute id always wins for stamping, so stored ids stop flip-flopping between forms in version control (legacy GUID ids keep resolving).
+- **Snapshot encoding** is culture-invariant (floats no longer break across OS locales), enums survive member reordering (underlying value instead of index), and `long`/`double` fields keep full precision.
+- The missing-entry label of one field could leak onto the next drawn field after a right-click.
+- All tool icons render on the light editor skin (dark-skin `d_` names were hardcoded).
+- The selector window survives inspector rebuilds and its settings popup no longer calls into a destroyed window; the selector also filters out types `[SerializeReference]` can't hold (structs, `UnityEngine.Object` descendants, types without a parameterless constructor), Enter picks the first search match, and the row highlight follows keyboard navigation.
+- Single StableRef entries nested inside values now appear in **Find Usages** (only nested lists did before).
+
+### Changed
+
+- **Fix All marks fixed scenes dirty instead of silently saving them** — save the scene yourself to persist the fix; fixed assets are saved individually (`SaveAssetIfDirty`) instead of a global `SaveAssets`.
+- Per-field fix (the warning button) runs the same pass-based recovery as Fix All, scoped to that entry, and no longer force-reimports the asset. Unity's native missing-type records are only cleared once a target has no missing entries left.
+- Both tool windows scan `Assets/` only (prefab scan previously included `Packages/`), and release loaded assets when the scan finishes.
+- `StableRefList` drawer caches are bounded (evicted on selection change) and the broken-entry check is memoized per editor tick.
+
 ## 1.2.0 - 18.08.2026
 
 ### Added
