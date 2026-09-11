@@ -161,6 +161,10 @@ All tools are available under **Tools → StableRef** in the Unity menu bar.
   <img src="Documentation~/fix-missing.gif" alt="Fix Missing Types window" width="560">
 </p>
 
+**What recovery restores.** Each entry keeps a snapshot of its value next to the managed reference. After a rename or re-creation, recovery restores nested structs, arrays and lists, hidden serialized fields, `UnityEngine.Object` references anywhere in the value, and StableRef entries nested inside it (fixed in passes). Not captured — these come back as the new instance's defaults: `AnimationCurve`, `Gradient`, `Hash128`, `ExposedReference`, fixed buffers.
+
+Entries whose ID cannot be resolved are **skipped and kept** by Fix All (restore the type or its `[StableTypeId]` and re-run); discard one deliberately via right-click → **Clear Entry**.
+
 ---
 
 ## Copying and pasting

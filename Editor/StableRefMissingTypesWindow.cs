@@ -307,8 +307,8 @@ namespace SST.StableRef
         {
             GUILayout.FlexibleSpace();
             EditorGUILayout.LabelField(
-                "Tip: If you are sure missing StableRef types exist but the scan finds nothing —\n" +
-                "restart Unity, or manually recreate the broken asset files.",
+                "Tip: only assets and scenes that are currently open are scanned —\n" +
+                "open the scenes you want checked, then re-run the scan.",
                 new GUIStyle(EditorStyles.centeredGreyMiniLabel) { wordWrap = true });
             GUILayout.Space(8);
         }
@@ -346,8 +346,7 @@ namespace SST.StableRef
         private struct MissingRefInfo
         {
             public GroupSeg[] GroupPath;
-            public string TypeDisplayName;
-            public string ResolvedName;
+            public string Label;
         }
 
         private struct ScanEntry
@@ -386,7 +385,8 @@ namespace SST.StableRef
                 foreach (var guid in assetGuids)
                 {
                     var path = AssetDatabase.GUIDToAssetPath(guid);
-                    EditorUtility.DisplayProgressBar("Scanning assets…", path, (float)idx++ / total);
+                    if (EditorUtility.DisplayCancelableProgressBar("Scanning assets…", path, (float)idx++ / total))
+                        break;
 
                     var asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path);
                     if (asset == null) continue;
@@ -407,6 +407,7 @@ namespace SST.StableRef
             finally { EditorUtility.ClearProgressBar(); }
 
             BuildTree();
+            EditorUtility.UnloadUnusedAssetsImmediate();
             Repaint();
         }
 
@@ -428,7 +429,8 @@ namespace SST.StableRef
             bool sceneLoaded = false, string sceneName = null)
         {
             if (target is not MonoBehaviour && target is not ScriptableObject) return;
-            if (!SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
+            if (!SerializationUtility.HasManagedReferencesWithMissingTypes(target)
+                && !StableRefPropertyUtils.MayContainStableRef(target.GetType())) return;
 
             var objectId = GlobalObjectId.GetGlobalObjectIdSlow(target);
             if (!_scanSeen.Add(objectId)) return;
@@ -465,35 +467,26 @@ namespace SST.StableRef
             var so = new SerializedObject(target);
             so.Update();
             var iter = so.GetIterator();
+            bool enter = true;
 
-            while (iter.Next(true))
+            while (iter.Next(enter))
             {
-                if (iter.propertyType != SerializedPropertyType.ManagedReference) continue;
-                if (iter.name != "Value") continue;
-                if (iter.managedReferenceValue != null) continue;
-
-                string parentPath = ParentPath(iter.propertyPath);
-                if (parentPath == null) continue;
-
-                var wrapperProp = so.FindProperty(parentPath);
-                if (wrapperProp == null) continue;
-
-                var typeIdProp = wrapperProp.FindPropertyRelative("TypeId");
-                var dispProp = wrapperProp.FindPropertyRelative("TypeDisplayName");
-                if (typeIdProp == null || string.IsNullOrEmpty(typeIdProp.stringValue)) continue;
-
-                string displayName = dispProp?.stringValue;
-                if (string.IsNullOrEmpty(displayName)) displayName = "?";
-
-                var recoveredType = StableRefTypeRegistry.GetType(typeIdProp.stringValue);
-                string resolvedName = recoveredType != null ? StableRefGenericUtils.DisplayName(recoveredType) : "None";
-
-                result.Add(new MissingRefInfo
+                if (TryGetMissingWrapper(so, iter, out var wrapperProp))
                 {
-                    GroupPath = GetFieldGroupPath(so, wrapperProp.propertyPath),
-                    TypeDisplayName = displayName,
-                    ResolvedName = resolvedName
-                });
+                    var typeIdProp = wrapperProp.FindPropertyRelative("TypeId");
+                    var dispProp = wrapperProp.FindPropertyRelative("TypeDisplayName");
+                    var recoveredType = StableRefTypeRegistry.GetType(typeIdProp.stringValue);
+
+                    result.Add(new MissingRefInfo
+                    {
+                        GroupPath = GetFieldGroupPath(so, wrapperProp.propertyPath),
+                        Label = StableRefEntry.BuildMissingLabelText(dispProp?.stringValue, recoveredType)
+                    });
+                }
+
+                enter = iter.propertyType == SerializedPropertyType.Generic
+                        || (iter.propertyType == SerializedPropertyType.ManagedReference
+                            && iter.managedReferenceValue != null);
             }
 
             return result;
@@ -566,7 +559,7 @@ namespace SST.StableRef
                         ? (string.IsNullOrEmpty(firstEntry.SceneName) ? "Untitled" : firstEntry.SceneName)
                         : System.IO.Path.GetFileNameWithoutExtension(assetPath),
                     Icon = isScene
-                        ? EditorGUIUtility.IconContent("d_SceneAsset Icon").image
+                        ? StableRefEditorUtility.Icon("d_SceneAsset Icon").image
                         : AssetDatabase.GetCachedIcon(assetPath),
                     PingTarget = assetObject,
                     AssetPath = assetPath
@@ -644,7 +637,7 @@ namespace SST.StableRef
                 parent.Children.Add(new Node
                 {
                     Kind = NodeKind.Item,
-                    Label = $"{StableRefEditorUtility.ValueLabelPrefix}Missing ({r.TypeDisplayName}) → {r.ResolvedName}",
+                    Label = StableRefEditorUtility.ValueLabelPrefix + r.Label,
                     Icon = EditorGUIUtility.IconContent("console.warnicon.sml").image,
                     PingTarget = pingTarget
                 });
@@ -740,7 +733,9 @@ namespace SST.StableRef
             var entries = components.Where(n => seen.Add(n.ObjectId)).ToList();
 
             int fixedCount = 0;
+            int unresolvedCount = 0;
             var fixedPaths = new HashSet<string>();
+            var fixedAssets = new List<UnityEngine.Object>();
 
             var assetEntries = entries.Where(n => !n.IsSceneObject).ToList();
             try
@@ -748,19 +743,27 @@ namespace SST.StableRef
                 for (int i = 0; i < assetEntries.Count; i++)
                 {
                     var node = assetEntries[i];
-                    EditorUtility.DisplayProgressBar("Fixing assets…",
-                        node.AssetPath, (float)i / assetEntries.Count);
+                    if (EditorUtility.DisplayCancelableProgressBar("Fixing assets…",
+                            node.AssetPath, (float)i / assetEntries.Count))
+                        break;
 
                     var target = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(node.ObjectId);
                     if (target == null) continue;
 
-                    fixedCount += FixTarget(target);
-                    fixedPaths.Add(node.AssetPath);
+                    int fixedHere = FixTarget(target, out int unresolved);
+                    fixedCount += fixedHere;
+                    unresolvedCount += unresolved;
+                    if (fixedHere > 0)
+                    {
+                        fixedPaths.Add(node.AssetPath);
+                        fixedAssets.Add(target);
+                    }
                 }
             }
             finally { EditorUtility.ClearProgressBar(); }
 
-            AssetDatabase.SaveAssets();
+            foreach (var asset in fixedAssets)
+                AssetDatabase.SaveAssetIfDirty(asset);
 
             var byScene = entries.Where(n => n.IsSceneObject).GroupBy(n => n.AssetPath).ToList();
             int skippedScenes = 0;
@@ -770,8 +773,9 @@ namespace SST.StableRef
                 {
                     var sceneGroup = byScene[si];
                     var scenePath = sceneGroup.Key;
-                    EditorUtility.DisplayProgressBar("Fixing scenes…",
-                        scenePath, (float)si / byScene.Count);
+                    if (EditorUtility.DisplayCancelableProgressBar("Fixing scenes…",
+                            scenePath, (float)si / byScene.Count))
+                        break;
 
                     var scene = SceneManager.GetSceneByPath(scenePath);
                     if (!scene.IsValid() || !scene.isLoaded)
@@ -780,15 +784,21 @@ namespace SST.StableRef
                         continue;
                     }
 
+                    int fixedInScene = 0;
                     foreach (var node in sceneGroup)
                     {
                         var target = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(node.ObjectId);
                         if (target == null) continue;
-                        fixedCount += FixTarget(target);
+                        fixedInScene += FixTarget(target, out int unresolved);
+                        unresolvedCount += unresolved;
                     }
 
-                    EditorSceneManager.SaveScene(scene);
-                    fixedPaths.Add(scenePath);
+                    if (fixedInScene > 0)
+                    {
+                        fixedCount += fixedInScene;
+                        EditorSceneManager.MarkSceneDirty(scene);
+                        fixedPaths.Add(scenePath);
+                    }
                 }
             }
             finally { EditorUtility.ClearProgressBar(); }
@@ -796,7 +806,16 @@ namespace SST.StableRef
             if (fixedPaths.Count > 0)
                 AssetDatabase.Refresh();
 
-            Debug.Log($"[StableRef] Fixed {fixedCount} missing reference{(fixedCount != 1 ? "s" : "")}.");
+            Debug.Log($"[StableRef] Fixed {fixedCount} missing reference{(fixedCount != 1 ? "s" : "")}. " +
+                      "Fixed scenes are marked dirty — save them to keep the changes.");
+
+            if (unresolvedCount > 0)
+            {
+                Debug.LogWarning(
+                    $"[StableRef] Skipped {unresolvedCount} entr{(unresolvedCount != 1 ? "ies" : "y")} whose stable id " +
+                    "no longer resolves to a type. Their recovery data was preserved — restore the type (or its " +
+                    "[StableTypeId]) and re-run Fix All, or right-click the field and choose Clear Entry to discard.");
+            }
 
             if (skippedScenes > 0)
             {
@@ -807,7 +826,6 @@ namespace SST.StableRef
 
             EditorApplication.delayCall += () =>
             {
-                StableRefHandler.ClearHadValue();
                 DoScan();
                 _showDomainReloadHint = HasAnyResults;
                 Repaint();
@@ -822,61 +840,100 @@ namespace SST.StableRef
                 CollectComponents(c, result);
         }
 
-        private static int FixTarget(UnityEngine.Object target)
+        private const int MaxFixPasses = 8;
+
+        /// <summary>
+        /// Recreates every missing StableRef entry on <paramref name="target"/> (optionally only under
+        /// <paramref name="pathPrefix"/>) from its stored id and snapshot. Runs in passes until a fixed
+        /// point: a recreated value can itself contain missing StableRef entries — their metadata is
+        /// restored by the snapshot on the pass that recreates the parent, and the next pass recreates
+        /// them. Entries whose id no longer resolves are skipped and counted in
+        /// <paramref name="unresolved"/>; their recovery data (and the target's native missing-type
+        /// data) is preserved so they stay fixable once the type is back.
+        /// </summary>
+        internal static int FixTarget(UnityEngine.Object target, out int unresolved, string pathPrefix = null)
         {
-            var so = new SerializedObject(target);
-            var iter = so.GetIterator();
-            int count = 0;
+            int totalFixed = 0;
+            unresolved = 0;
 
-            so.Update();
-
-            while (iter.Next(true))
+            for (int pass = 0; pass < MaxFixPasses; pass++)
             {
-                if (iter.propertyType != SerializedPropertyType.ManagedReference) continue;
-                if (iter.name != "Value") continue;
-                if (iter.managedReferenceValue != null) continue;
+                var so = new SerializedObject(target);
+                so.Update();
 
-                string parentPath = ParentPath(iter.propertyPath);
-                if (parentPath == null) continue;
+                var wrapperPaths = CollectMissingWrapperPaths(so, pathPrefix);
+                int fixedThisPass = 0;
+                unresolved = 0;
 
-                var wrapperProp = so.FindProperty(parentPath);
-                if (wrapperProp == null) continue;
-
-                var typeIdProp = wrapperProp.FindPropertyRelative("TypeId");
-                var valueProp = wrapperProp.FindPropertyRelative("Value");
-                var dispProp = wrapperProp.FindPropertyRelative("TypeDisplayName");
-                if (typeIdProp == null || valueProp == null) continue;
-                if (string.IsNullOrEmpty(typeIdProp.stringValue)) continue;
-
-                var recoveredType = StableRefTypeRegistry.GetType(typeIdProp.stringValue);
-                if (recoveredType != null)
+                foreach (var path in wrapperPaths)
                 {
-                    valueProp.managedReferenceValue = Activator.CreateInstance(recoveredType);
-                    StableRefHandler.RestoreBackup(wrapperProp, valueProp);
-                    if (dispProp != null) dispProp.stringValue = StableRefGenericUtils.DisplayName(recoveredType);
-                }
-                else
-                {
-                    valueProp.managedReferenceValue = null;
-                    typeIdProp.stringValue = string.Empty;
-                    if (dispProp != null) dispProp.stringValue = string.Empty;
-                    wrapperProp.FindPropertyRelative("ObjectRefs")?.ClearArray();
-                    wrapperProp.FindPropertyRelative("ObjectRefPaths")?.ClearArray();
-                    var valData = wrapperProp.FindPropertyRelative("ValuesData");
-                    if (valData != null) valData.stringValue = string.Empty;
+                    var wrapper = so.FindProperty(path);
+                    if (wrapper == null) continue;
+                    if (StableRefEntry.TryRecreate(wrapper)) fixedThisPass++;
+                    else unresolved++;
                 }
 
-                count++;
+                if (fixedThisPass == 0) break;
+                so.ApplyModifiedProperties();
+                totalFixed += fixedThisPass;
             }
 
-            if (count > 0)
+            if (totalFixed > 0)
             {
-                so.ApplyModifiedProperties();
-                SerializationUtility.ClearAllManagedReferencesWithMissingTypes(target);
+                var soAfter = new SerializedObject(target);
+                soAfter.Update();
+                if (CollectMissingWrapperPaths(soAfter, null).Count == 0)
+                    SerializationUtility.ClearAllManagedReferencesWithMissingTypes(target);
                 EditorUtility.SetDirty(target);
             }
 
-            return count;
+            return totalFixed;
+        }
+
+        private static List<string> CollectMissingWrapperPaths(SerializedObject so, string pathPrefix)
+        {
+            var result = new List<string>();
+            var iter = so.GetIterator();
+            bool enter = true;
+
+            while (iter.Next(enter))
+            {
+                if (TryGetMissingWrapper(so, iter, out var wrapper))
+                {
+                    string path = wrapper.propertyPath;
+                    if (pathPrefix == null
+                        || path == pathPrefix
+                        || path.StartsWith(pathPrefix + ".", StringComparison.Ordinal))
+                        result.Add(path);
+                }
+
+                enter = iter.propertyType == SerializedPropertyType.Generic
+                        || (iter.propertyType == SerializedPropertyType.ManagedReference
+                            && iter.managedReferenceValue != null);
+            }
+
+            return result;
+        }
+
+        private static bool TryGetMissingWrapper(SerializedObject so, SerializedProperty valueIter, out SerializedProperty wrapper)
+        {
+            wrapper = null;
+            if (valueIter.propertyType != SerializedPropertyType.ManagedReference) return false;
+            if (valueIter.name != "Value") return false;
+            if (valueIter.managedReferenceValue != null) return false;
+
+            string parentPath = ParentPath(valueIter.propertyPath);
+            if (parentPath == null) return false;
+
+            var candidate = so.FindProperty(parentPath);
+            if (candidate == null) return false;
+
+            var typeIdProp = candidate.FindPropertyRelative("TypeId");
+            if (typeIdProp == null || string.IsNullOrEmpty(typeIdProp.stringValue)) return false;
+            if (candidate.FindPropertyRelative("ValuesData") == null) return false;
+
+            wrapper = candidate;
+            return true;
         }
 
         private static string ParentPath(string propertyPath)

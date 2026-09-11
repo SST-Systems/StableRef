@@ -102,7 +102,7 @@ namespace SST.StableRef
                 catch { _missingIds.Add(id); return null; }
             }
 
-            var path = AssetDatabase.GUIDToAssetPath(id);
+            var path = LooksLikeGuid(id) ? AssetDatabase.GUIDToAssetPath(id) : null;
 
             if (!string.IsNullOrEmpty(path))
             {
@@ -128,9 +128,21 @@ namespace SST.StableRef
         private static void Register(string id, Type type)
         {
             _idToType[id] = type;
-            _typeToId[type] = id;
+
+            string canonical = CanonicalId(type, id);
+            if (canonical != id) _idToType[canonical] = type;
+            _typeToId[type] = canonical;
+
             _missingTypes.Remove(type);
             _missingIds.Remove(id);
+        }
+
+        private static string CanonicalId(Type type, string fallback)
+        {
+            if (type.IsGenericType && !type.IsGenericTypeDefinition) return fallback;
+
+            var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(StableTypeIdAttribute));
+            return string.IsNullOrEmpty(attr?.Id) ? fallback : attr.Id;
         }
 
         [InitializeOnLoadMethod]
@@ -152,6 +164,15 @@ namespace SST.StableRef
                     byId[attr.Id] = type;
                 }
             }
+        }
+
+        private static bool LooksLikeGuid(string id)
+        {
+            if (id.Length != 32) return false;
+            foreach (char c in id)
+                if (!(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f'))
+                    return false;
+            return true;
         }
 
         private const char GenOpen = '<';

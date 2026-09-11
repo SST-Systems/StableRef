@@ -358,17 +358,20 @@ namespace SST.StableRef
             _roots.Add(sceneGroup);
             _roots.Add(soGroup);
 
+            EditorUtility.UnloadUnusedAssetsImmediate();
+
             InvalidateVisibility();
             Repaint();
         }
 
         private static void ScanPrefabs(Node group)
         {
-            var guids = AssetDatabase.FindAssets("t:Prefab");
+            var guids = AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" });
             for (int i = 0; i < guids.Length; i++)
             {
-                EditorUtility.DisplayProgressBar("StableRef Usages",
-                    $"Prefabs ({i + 1} / {guids.Length})", 0.7f * i / guids.Length);
+                if (EditorUtility.DisplayCancelableProgressBar("StableRef Usages",
+                        $"Prefabs ({i + 1} / {guids.Length})", 0.7f * i / guids.Length))
+                    break;
 
                 var path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 var go = AssetDatabase.LoadAssetAtPath<GameObject>(path);
@@ -403,7 +406,7 @@ namespace SST.StableRef
                 {
                     Kind = NodeKind.Asset,
                     Label = string.IsNullOrEmpty(scene.name) ? "Untitled" : scene.name,
-                    Icon = EditorGUIUtility.IconContent("d_SceneAsset Icon").image,
+                    Icon = StableRefEditorUtility.Icon("d_SceneAsset Icon").image,
                     PingTarget = sceneAsset
                 };
                 foreach (var root in scene.GetRootGameObjects())
@@ -415,12 +418,13 @@ namespace SST.StableRef
 
         private static void ScanScriptableObjects(Node group)
         {
-            var guids = AssetDatabase.FindAssets("t:ScriptableObject");
+            var guids = AssetDatabase.FindAssets("t:ScriptableObject", new[] { "Assets" });
             for (int i = 0; i < guids.Length; i++)
             {
-                EditorUtility.DisplayProgressBar("StableRef Usages",
-                    $"Scriptable Objects ({i + 1} / {guids.Length})",
-                    0.8f + 0.2f * i / guids.Length);
+                if (EditorUtility.DisplayCancelableProgressBar("StableRef Usages",
+                        $"Scriptable Objects ({i + 1} / {guids.Length})",
+                        0.8f + 0.2f * i / guids.Length))
+                    break;
 
                 var path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 if (!path.StartsWith("Assets/")) continue;
@@ -615,6 +619,23 @@ namespace SST.StableRef
                     if (sub != null) node.Children.Add(sub);
                     enter = false;
                 }
+                else if (iter.propertyType == SerializedPropertyType.Generic
+                         && iter.FindPropertyRelative("TypeId") != null
+                         && iter.FindPropertyRelative("Value") is
+                             { propertyType: SerializedPropertyType.ManagedReference } nestedValue)
+                {
+                    if (nestedValue.managedReferenceValue != null)
+                    {
+                        var group = new Node { Kind = NodeKind.Item, Label = iter.displayName, PingTarget = pingTarget };
+                        var sub = BuildItemNode(nestedValue, pingTarget);
+                        if (sub != null)
+                        {
+                            group.Children.Add(sub);
+                            node.Children.Add(group);
+                        }
+                    }
+                    enter = false;
+                }
                 else if (iter.propertyType == SerializedPropertyType.ManagedReference)
                 {
                     enter = false;
@@ -698,17 +719,7 @@ namespace SST.StableRef
             return found.gameObject;
         }
 
-        private static string GetTypeDisplayName(Type type)
-        {
-            string name = type.IsGenericType
-                ? type.Name.Substring(0, type.Name.IndexOf('`'))
-                : type.Name;
-
-            if (name.StartsWith("I") && type.IsInterface)
-                name = name.Substring(1);
-
-            return name;
-        }
+        private static string GetTypeDisplayName(Type type) => StableRefGenericUtils.DisplayName(type);
 
         private static Texture GetTypeIcon(Type type)
         {

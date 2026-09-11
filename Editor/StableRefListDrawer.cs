@@ -10,6 +10,14 @@ namespace SST.StableRef
     public class StableRefListDrawer : PropertyDrawer
     {
         private static readonly Dictionary<(int, string), ReorderableList> _cache = new();
+        private static readonly Dictionary<(int, string), bool> _brokenMemo = new();
+
+        [InitializeOnLoadMethod]
+        private static void HookCacheEviction()
+        {
+            Selection.selectionChanged += () => { _cache.Clear(); _brokenMemo.Clear(); };
+            EditorApplication.update += _brokenMemo.Clear;
+        }
 
         /// <summary>
         /// Drops the cached <see cref="ReorderableList"/> instances so they are rebuilt on the next
@@ -173,30 +181,28 @@ namespace SST.StableRef
             return rl;
         }
 
-        private static void ResetElement(SerializedProperty elem)
-        {
-            var valueProp = elem.FindPropertyRelative("Value");
-            if (valueProp != null) valueProp.managedReferenceValue = null;
-            var typeId = elem.FindPropertyRelative("TypeId");
-            if (typeId != null) typeId.stringValue = string.Empty;
-            var dispName = elem.FindPropertyRelative("TypeDisplayName");
-            if (dispName != null) dispName.stringValue = string.Empty;
-            elem.FindPropertyRelative("ObjectRefs")?.ClearArray();
-            elem.FindPropertyRelative("ObjectRefPaths")?.ClearArray();
-            var valData = elem.FindPropertyRelative("ValuesData");
-            if (valData != null) valData.stringValue = string.Empty;
-        }
+        private static void ResetElement(SerializedProperty elem) => StableRefEntry.Clear(elem);
 
         private static bool HasBrokenRefs(SerializedProperty itemsProp)
         {
+            var key = (itemsProp.serializedObject.targetObject.GetInstanceID(), itemsProp.propertyPath);
+            if (_brokenMemo.TryGetValue(key, out var cached)) return cached;
+
+            bool broken = false;
             for (int i = 0; i < itemsProp.arraySize; i++)
             {
                 var elem = itemsProp.GetArrayElementAtIndex(i);
-                if (!string.IsNullOrEmpty(elem.FindPropertyRelative("TypeId")?.stringValue)
-                    && elem.FindPropertyRelative("Value")?.managedReferenceValue == null)
-                    return true;
+                var typeIdProp = elem.FindPropertyRelative("TypeId");
+                if (typeIdProp == null || string.IsNullOrEmpty(typeIdProp.stringValue)) continue;
+                if (elem.FindPropertyRelative("Value")?.managedReferenceValue == null)
+                {
+                    broken = true;
+                    break;
+                }
             }
-            return false;
+
+            _brokenMemo[key] = broken;
+            return broken;
         }
 
     }

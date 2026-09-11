@@ -233,6 +233,7 @@ namespace SST.StableRef
             foreach (var t in TypeCache.GetTypesDerivedFrom(query))
             {
                 if (t.IsAbstract || t.IsInterface || t.IsGenericTypeDefinition || !baseType.IsAssignableFrom(t)) continue;
+                if (!IsInstantiableReferenceValue(t)) continue;
                 if (StableRefTypeRegistry.GetOrAssignId(t) == null) continue;
 
                 var cat = t.GetCustomAttribute<StableRefCategoryAttribute>();
@@ -252,6 +253,7 @@ namespace SST.StableRef
             {
                 foreach (var closed in StableRefGenericUtils.CollectClosedGenericCandidates(baseType))
                 {
+                    if (!IsInstantiableReferenceValue(closed)) continue;
                     if (StableRefTypeRegistry.GetOrAssignId(closed) == null) continue;
 
                     var gcat = closed.GetCustomAttribute<StableRefCategoryAttribute>();
@@ -277,12 +279,84 @@ namespace SST.StableRef
             return arr;
         }
 
+        /// <summary>
+        /// True when <paramref name="t"/> can actually live in a <c>[SerializeReference]</c> field:
+        /// a non-UnityEngine.Object reference type with a parameterless constructor.
+        /// </summary>
+        private static bool IsInstantiableReferenceValue(Type t)
+        {
+            if (t.IsValueType) return false;
+            if (typeof(UnityEngine.Object).IsAssignableFrom(t)) return false;
+            return t.GetConstructor(
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                binder: null, Type.EmptyTypes, modifiers: null) != null;
+        }
+
         private static bool TryGetValueFieldType(SerializedProperty property, out Type type)
         {
             type = null;
             if (!TryResolvePath(property, out var r)) return false;
             type = r.ValueType;
             return type != null;
+        }
+
+        private static readonly Dictionary<Type, bool> _mayContainStableRef = new();
+
+        /// <summary>
+        /// Fast, cached answer to "can serialized data of this type possibly contain a StableRef entry?"
+        /// Walks the declared serializable field graph. Conservative: unknown or too-deep shapes
+        /// (including any <c>[SerializeReference]</c> field, whose runtime contents are open-ended)
+        /// count as true, so a false result is a safe reason to skip scanning an object.
+        /// </summary>
+        public static bool MayContainStableRef(Type rootType)
+        {
+            if (rootType == null) return false;
+            if (_mayContainStableRef.TryGetValue(rootType, out var cached)) return cached;
+
+            bool result = MayContainStableRefRecursive(rootType, new HashSet<Type>(), depth: 0);
+            _mayContainStableRef[rootType] = result;
+            return result;
+        }
+
+        private const int MayContainMaxDepth = 8;
+
+        private static bool MayContainStableRefRecursive(Type type, HashSet<Type> visited, int depth)
+        {
+            if (depth > MayContainMaxDepth) return true;
+            if (!visited.Add(type)) return false;
+
+            for (var t = type; t != null && t != typeof(object); t = t.BaseType)
+            {
+                foreach (var field in t.GetFields(BindingFlags.Public | BindingFlags.NonPublic
+                                                  | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                {
+                    if (field.IsDefined(typeof(NonSerializedAttribute), inherit: false)) continue;
+
+                    bool serializeReference = field.IsDefined(typeof(UnityEngine.SerializeReference), inherit: false);
+                    bool serialized = field.IsPublic
+                                      || serializeReference
+                                      || field.IsDefined(typeof(SerializeField), inherit: false);
+                    if (!serialized) continue;
+                    if (serializeReference) return true;
+
+                    var fieldType = field.FieldType;
+                    if (fieldType.IsArray) fieldType = fieldType.GetElementType();
+                    else if (fieldType.IsGenericType && fieldType.GetGenericTypeDefinition() == typeof(List<>))
+                        fieldType = fieldType.GetGenericArguments()[0];
+                    if (fieldType == null) continue;
+
+                    if (typeof(StableRefBase).IsAssignableFrom(fieldType)) return true;
+                    if (typeof(StableRefListBase).IsAssignableFrom(fieldType)) return true;
+
+                    if (fieldType.IsPrimitive || fieldType.IsEnum || fieldType == typeof(string)) continue;
+                    if (typeof(UnityEngine.Object).IsAssignableFrom(fieldType)) continue;
+                    if (!fieldType.IsSerializable) continue;
+
+                    if (MayContainStableRefRecursive(fieldType, visited, depth + 1)) return true;
+                }
+            }
+
+            return false;
         }
 
         public static Type[] SafeGetTypes(Assembly a)
@@ -380,10 +454,7 @@ namespace SST.StableRef
                 }
                 
                 if (field == null)
-                {
-                    _pathCache[key] = default;
                     return false;
-                }
 
                 rawType = field.FieldType;
                 currType = rawType;
@@ -437,17 +508,34 @@ namespace SST.StableRef
                     ManagedRefPrefix.Length,
                     propertyType.Length - ManagedRefPrefix.Length - 1);
 
+                Type first = null;
                 var asms = AppDomain.CurrentDomain.GetAssemblies();
                 for (int ai = 0; ai < asms.Length; ai++)
                 {
                     var types = SafeGetTypes(asms[ai]);
                     for (int ti = 0; ti < types.Length; ti++)
-                        if (types[ti].Name == typeName) return types[ti];
+                    {
+                        if (types[ti].Name != typeName) continue;
+                        if (first == null)
+                        {
+                            first = types[ti];
+                        }
+                        else if (first != types[ti] && _ambiguousShortNames.Add(typeName))
+                        {
+                            Debug.LogWarning(
+                                $"[StableRef] Several types share the short name '{typeName}' " +
+                                $"('{first.FullName}', '{types[ti].FullName}', ...). Using '{first.FullName}' " +
+                                "as the field's base type — results may be wrong for the others.");
+                        }
+                    }
                 }
+                if (first != null) return first;
             }
 
             return typeof(object);
         }
+
+        private static readonly HashSet<string> _ambiguousShortNames = new();
     }
 }
 #endif

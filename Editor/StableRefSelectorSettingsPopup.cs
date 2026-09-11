@@ -38,8 +38,8 @@ namespace SST.StableRef
             GUILayout.Space(6f);
             EditorGUIUtility.labelWidth = 52f;
             EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Apply", EditorStyles.miniButton)) { _owner?.ApplySettings(_w, _h); Close(); }
-            if (GUILayout.Button("Reset", EditorStyles.miniButton)) { _owner?.ResetSettings(); Close(); }
+            if (GUILayout.Button("Apply", EditorStyles.miniButton)) { if (_owner != null) _owner.ApplySettings(_w, _h); Close(); }
+            if (GUILayout.Button("Reset", EditorStyles.miniButton)) { if (_owner != null) _owner.ResetSettings(); Close(); }
             EditorGUILayout.EndHorizontal();
 
             GUILayout.EndArea();
