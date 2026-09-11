@@ -137,9 +137,12 @@ namespace SST.StableRef
             if (hasChildren)
             {
                 float foldoutX = hasLabel ? controlLine.x - 4f : controlLine.x;
+                int prevIndent = EditorGUI.indentLevel;
+                EditorGUI.indentLevel = 0;
                 EditorGUI.BeginChangeCheck();
                 bool expanded = EditorGUI.Foldout(
                     new Rect(foldoutX, controlLine.y, FoldoutW, controlLine.height), property.isExpanded, GUIContent.none, true);
+                EditorGUI.indentLevel = prevIndent;
                 if (EditorGUI.EndChangeCheck())
                 {
                     if (ev.alt)
