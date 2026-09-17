@@ -396,9 +396,9 @@ namespace SST.StableRef
             so.ApplyModifiedProperties();
         }
 
-        private static Dictionary<string, int> CollectObjectReferences(SerializedProperty root)
+        private static Dictionary<string, long> CollectObjectReferences(SerializedProperty root)
         {
-            Dictionary<string, int> result = null;
+            Dictionary<string, long> result = null;
             var iter = root.Copy();
             var end = root.GetEndProperty();
             string rootPath = root.propertyPath;
@@ -406,14 +406,17 @@ namespace SST.StableRef
             bool hasProp = iter.Next(enterChildren: true);
             while (hasProp && !SerializedProperty.EqualContents(iter, end))
             {
-                if (iter.propertyType == SerializedPropertyType.ObjectReference
-                    && iter.objectReferenceInstanceIDValue != 0)
+                if (iter.propertyType == SerializedPropertyType.ObjectReference)
                 {
-                    string full = iter.propertyPath;
-                    if (full.Length > rootPath.Length + 1)
+                    long refId = StableRefEditorUtility.GetObjectReferenceId(iter);
+                    if (refId != 0)
                     {
-                        result ??= new Dictionary<string, int>();
-                        result[full.Substring(rootPath.Length + 1)] = iter.objectReferenceInstanceIDValue;
+                        string full = iter.propertyPath;
+                        if (full.Length > rootPath.Length + 1)
+                        {
+                            result ??= new Dictionary<string, long>();
+                            result[full.Substring(rootPath.Length + 1)] = refId;
+                        }
                     }
                 }
 
@@ -425,7 +428,7 @@ namespace SST.StableRef
             return result;
         }
 
-        private static void RestoreObjectReferences(SerializedProperty root, Dictionary<string, int> refs)
+        private static void RestoreObjectReferences(SerializedProperty root, Dictionary<string, long> refs)
         {
             if (refs == null) return;
             string rootPath = root.propertyPath;
@@ -433,7 +436,7 @@ namespace SST.StableRef
 
             foreach (var (rel, id) in refs)
             {
-                var obj = EditorUtility.InstanceIDToObject(id);
+                var obj = StableRefEditorUtility.IdToObject(id);
                 if (obj == null) continue;
 
                 var prop = so.FindProperty(rootPath + "." + rel);

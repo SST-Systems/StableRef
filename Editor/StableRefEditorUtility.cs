@@ -122,6 +122,36 @@ namespace SST.StableRef
                 }
             }
         }
+
+        /// <summary>Session-stable numeric id of an object (InstanceID on Unity &lt; 6000.5, EntityId on 6000.5+).</summary>
+        public static long GetStableId(UnityEngine.Object obj)
+        {
+#if UNITY_6000_5_OR_NEWER
+            return unchecked((long)obj.GetEntityId().ToULong());
+#else
+            return obj.GetInstanceID();
+#endif
+        }
+
+        /// <summary>Numeric id of a property's object reference, or 0 when it holds none.</summary>
+        public static long GetObjectReferenceId(SerializedProperty property)
+        {
+#if UNITY_6000_5_OR_NEWER
+            return unchecked((long)property.objectReferenceEntityIdValue.ToULong());
+#else
+            return property.objectReferenceInstanceIDValue;
+#endif
+        }
+
+        /// <summary>Resolves an id from <see cref="GetObjectReferenceId"/> back to its object (null if gone).</summary>
+        public static UnityEngine.Object IdToObject(long id)
+        {
+#if UNITY_6000_5_OR_NEWER
+            return EditorUtility.EntityIdToObject(EntityId.FromULong(unchecked((ulong)id)));
+#else
+            return EditorUtility.InstanceIDToObject((int)id);
+#endif
+        }
     }
 }
 #endif
