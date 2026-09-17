@@ -1,5 +1,11 @@
 # StableRef
 
+## 2.0.1 - 17.09.2026
+
+### Fixed
+
+- **Unity 6000.5+ compatibility (InstanceID → EntityId).** Unity 6000.4 replaced the 32-bit `InstanceID` with the 64-bit `EntityId`, and 6000.5 turned the old `Object.GetInstanceID()`, `SerializedProperty.objectReferenceInstanceIDValue` and `EditorUtility.InstanceIDToObject` APIs into hard compile errors. The editor code now routes those through a version-gated shim (`StableRefEditorUtility.GetStableId` / `GetObjectReferenceId` / `IdToObject`, guarded on `UNITY_6000_5_OR_NEWER`): the EntityId path compiles on 6000.5+, the InstanceID path on older editors, so the package builds cleanly from 2021.3 through 6000.6+. In-session id maps widened from `int` to `long`; nothing serialized changed.
+
 ## 2.0.0 - 28.08.2026
 
 ### Breaking

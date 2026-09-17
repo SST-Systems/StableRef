@@ -9,8 +9,8 @@ namespace SST.StableRef
     [CustomPropertyDrawer(typeof(StableRefListBase), useForChildren: true)]
     public class StableRefListDrawer : PropertyDrawer
     {
-        private static readonly Dictionary<(int, string), ReorderableList> _cache = new();
-        private static readonly Dictionary<(int, string), bool> _brokenMemo = new();
+        private static readonly Dictionary<(long, string), ReorderableList> _cache = new();
+        private static readonly Dictionary<(long, string), bool> _brokenMemo = new();
 
         [InitializeOnLoadMethod]
         private static void HookCacheEviction()
@@ -124,7 +124,7 @@ namespace SST.StableRef
         
         private ReorderableList GetOrCreateList(SerializedProperty property, SerializedProperty itemsProp)
         {
-            var key = (property.serializedObject.targetObject.GetInstanceID(), property.propertyPath);
+            var key = (StableRefEditorUtility.GetStableId(property.serializedObject.targetObject), property.propertyPath);
             if (!_cache.TryGetValue(key, out var list))
                 _cache[key] = list = BuildList(itemsProp);
 
@@ -185,7 +185,7 @@ namespace SST.StableRef
 
         private static bool HasBrokenRefs(SerializedProperty itemsProp)
         {
-            var key = (itemsProp.serializedObject.targetObject.GetInstanceID(), itemsProp.propertyPath);
+            var key = (StableRefEditorUtility.GetStableId(itemsProp.serializedObject.targetObject), itemsProp.propertyPath);
             if (_brokenMemo.TryGetValue(key, out var cached)) return cached;
 
             bool broken = false;

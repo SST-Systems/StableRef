@@ -13,7 +13,7 @@ namespace SST.StableRef
 
         public static bool HasValue => !string.IsNullOrEmpty(Json) && ValueType != null;
 
-        public static Dictionary<string, int> ValueObjectRefs { get; private set; }
+        public static Dictionary<string, long> ValueObjectRefs { get; private set; }
 
         public static void StoreValue(object value)
         {
@@ -30,13 +30,13 @@ namespace SST.StableRef
             ValueObjectRefs = null;
         }
 
-        public static void StoreValueObjectRefs(Dictionary<string, int> refs)
+        public static void StoreValueObjectRefs(Dictionary<string, long> refs)
             => ValueObjectRefs = refs;
 
         public sealed class ListClipboardData
         {
             public readonly List<string> Entries = new();
-            public readonly List<Dictionary<string, int>> ObjectRefs = new();
+            public readonly List<Dictionary<string, long>> ObjectRefs = new();
             public Type ElementBaseType;
         }
 
