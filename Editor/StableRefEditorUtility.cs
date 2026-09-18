@@ -127,7 +127,7 @@ namespace SST.StableRef
         public static long GetStableId(UnityEngine.Object obj)
         {
 #if UNITY_6000_5_OR_NEWER
-            return unchecked((long)obj.GetEntityId().ToULong());
+            return unchecked((long)EntityId.ToULong(obj.GetEntityId()));
 #else
             return obj.GetInstanceID();
 #endif
@@ -137,7 +137,7 @@ namespace SST.StableRef
         public static long GetObjectReferenceId(SerializedProperty property)
         {
 #if UNITY_6000_5_OR_NEWER
-            return unchecked((long)property.objectReferenceEntityIdValue.ToULong());
+            return unchecked((long)EntityId.ToULong(property.objectReferenceEntityIdValue));
 #else
             return property.objectReferenceInstanceIDValue;
 #endif
