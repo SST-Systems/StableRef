@@ -565,11 +565,13 @@ namespace SST.StableRef
                 if (prop == null) continue;
 
                 var current = prop.managedReferenceValue;
+                var wrapper = StableRefEntry.FindWrapperOfValue(so, path);
                 bool missing = StableRefEntry.HoldsMissingData(so, prop);
-                if (!missing && (row.IsNone ? current == null : current?.GetType() == row.Entry.Type)) continue;
+                bool plainMissing = wrapper == null && StableRefEntry.PointsAtMissingType(prop);
+                if (!missing && !plainMissing
+                    && (row.IsNone ? current == null : current?.GetType() == row.Entry.Type)) continue;
 
                 long oldId = prop.managedReferenceId;
-                var wrapper = StableRefEntry.FindWrapperOfValue(so, path);
 
                 if (row.IsNone)
                 {
@@ -586,7 +588,7 @@ namespace SST.StableRef
 
                 prop.isExpanded = expand;
                 so.ApplyModifiedProperties();
-                if (missing) StableRefEntry.ReleaseMissingData(target, new[] { oldId });
+                if (missing || plainMissing) StableRefEntry.ReleaseMissingData(target, new[] { oldId });
             }
 
             StableRefMultiEdit.Invalidate();

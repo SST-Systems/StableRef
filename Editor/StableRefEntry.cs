@@ -50,16 +50,22 @@ namespace SST.StableRef
         }
 
         /// <summary>
-        /// True when <paramref name="valueProp"/> holds recoverable data but no value: a StableRef entry in the
-        /// missing state, or a plain <c>[SerializeReference]</c> whose class can't be loaded.
+        /// True when <paramref name="valueProp"/> is the <c>Value</c> of a StableRef entry that holds recoverable
+        /// data but no value — replacing it discards that data, so it is confirmed first. Plain
+        /// <c>[SerializeReference]</c> / <see cref="RefSelectorAttribute"/> fields are at the user's own risk and
+        /// never count (see <see cref="PointsAtMissingType"/>).
         /// </summary>
         internal static bool HoldsMissingData(SerializedObject so, SerializedProperty valueProp)
         {
             if (valueProp.managedReferenceValue != null) return false;
-            if (valueProp.managedReferenceId != StableRefEditorUtility.ManagedRefIdNull) return true;
             var wrapper = FindWrapperOfValue(so, valueProp.propertyPath);
-            return wrapper != null && IsMissing(wrapper);
+            return wrapper != null && (PointsAtMissingType(valueProp) || IsMissing(wrapper));
         }
+
+        /// <summary>True when the managed reference is set but its class can't be loaded.</summary>
+        internal static bool PointsAtMissingType(SerializedProperty valueProp)
+            => valueProp.managedReferenceValue == null
+               && valueProp.managedReferenceId != StableRefEditorUtility.ManagedRefIdNull;
 
         /// <summary>
         /// Releases Unity's native missing-type data of <paramref name="target"/> after an explicit discard or a

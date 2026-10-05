@@ -146,7 +146,7 @@ public class EffectAuthoring : MonoBehaviour
 
 The field stays an ordinary `[SerializeReference]`: code reads `_onPickup` directly (no `.Value`), and the attribute is `[Conditional("UNITY_EDITOR")]`, so it is not even emitted into player builds. This is useful for ECS authoring/baking code, for existing `[SerializeReference]` fields you don't want to migrate, and for large lists where per-entry metadata isn't worth it. The selector offers every instantiable type, including types without a stable id; copy/paste from the context menu works as usual.
 
-> **Use at your own risk.** `[RefSelector]` fields have **no rename protection**: renaming or moving the value's class breaks the reference exactly as with a bare `[SerializeReference]`. They are deliberately **not** covered by **Find Usages** or **Fix Missing Types**. The inspector shows a broken field as `Missing (ClassName)` instead of `None`, so you don't overwrite it unnoticed. To rename a class safely, add Unity's `[MovedFrom]` (`UnityEngine.Scripting.APIUpdating`) to it. If you need refactor-proof, tracked references, use `StableRef<T>`.
+> **Use at your own risk.** `[RefSelector]` fields have **no rename protection**: renaming or moving the value's class breaks the reference exactly as with a bare `[SerializeReference]`. They are deliberately **not** covered by **Find Usages** or **Fix Missing Types**. A field whose class is gone simply shows an empty selector (`None`) and can be replaced without confirmation. To rename a class safely, add Unity's `[MovedFrom]` (`UnityEngine.Scripting.APIUpdating`) to it. If you need refactor-proof, tracked references, use `StableRef<T>`.
 
 ### Keyboard navigation in the selector
 

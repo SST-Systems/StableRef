@@ -85,7 +85,11 @@ namespace SST.StableRef
 
                 AddItem(menu, "StableRef/Copy", hasValue, () => CopyValue(prop));
                 AddItem(menu, "StableRef/Paste", clipFits, () => PasteValue(prop));
-                AddItem(menu, "StableRef/Duplicate", hasValue && isInArray, () => DuplicateValue(prop));
+                if (isInArray)
+                {
+                    AddItem(menu, "StableRef/Duplicate Array Element", hasValue, () => DuplicateValue(prop));
+                    menu.AddItem(new GUIContent("StableRef/Delete Array Element"), false, () => DeleteElement(prop));
+                }
                 if (hasValue || StableRefEntry.HoldsMissingData(prop.serializedObject, prop))
                     menu.AddItem(new GUIContent("StableRef/Set to None"), false, () => SetNone(prop));
                 return;
@@ -245,7 +249,8 @@ namespace SST.StableRef
 
                 var valueProp = so.FindProperty(valuePath);
                 bool missing = valueProp != null && valueProp.propertyType == SerializedPropertyType.ManagedReference
-                               && StableRefEntry.HoldsMissingData(so, valueProp);
+                               && (StableRefEntry.HoldsMissingData(so, valueProp)
+                                   || StableRefEntry.PointsAtMissingType(valueProp));
                 long oldId = missing ? valueProp.managedReferenceId : StableRefEditorUtility.ManagedRefIdNull;
 
                 arr.DeleteArrayElementAtIndex(index);
@@ -261,36 +266,49 @@ namespace SST.StableRef
         {
             if (!StableRefPropertyUtils.TryGetParentArray(property, out var array, out var index)) return;
 
-            var value = property.managedReferenceValue;
-            if (value == null) return;
+            string arrayPath = array.propertyPath;
+            string valuePath = property.propertyPath;
+            bool expanded = property.isExpanded;
 
-            string json = StableRefClipboard.Serialize(value);
-            var copy = StableRefClipboard.Deserialize(json);
-            if (copy == null) return;
+            foreach (var target in property.serializedObject.targetObjects)
+            {
+                if (target == null) continue;
 
-            var so = property.serializedObject;
-            so.Update();
+                var so = new SerializedObject(target);
+                so.Update();
+                var arr = so.FindProperty(arrayPath);
+                var source = so.FindProperty(valuePath);
+                if (arr == null || source == null || index >= arr.arraySize) continue;
 
-            var originalSnapshot = array.GetArrayElementAtIndex(index).Copy();
+                var value = source.managedReferenceValue;
+                if (value == null) continue;
+                var copy = StableRefClipboard.Deserialize(StableRefClipboard.Serialize(value));
+                if (copy == null) continue;
 
-            array.InsertArrayElementAtIndex(index + 1);
-            var inserted = array.GetArrayElementAtIndex(index + 1);
+                var originalSnapshot = arr.GetArrayElementAtIndex(index).Copy();
 
-            var insertedValue = inserted.propertyType == SerializedPropertyType.ManagedReference
-                ? inserted
-                : inserted.FindPropertyRelative(StableRefEntry.ValueFieldName);
-            if (insertedValue == null || insertedValue.propertyType != SerializedPropertyType.ManagedReference)
-                return;
+                arr.InsertArrayElementAtIndex(index + 1);
+                var inserted = arr.GetArrayElementAtIndex(index + 1);
 
-            insertedValue.managedReferenceValue = copy;
-            insertedValue.isExpanded = property.isExpanded;
+                var insertedValue = inserted.propertyType == SerializedPropertyType.ManagedReference
+                    ? inserted
+                    : inserted.FindPropertyRelative(StableRefEntry.ValueFieldName);
+                if (insertedValue == null || insertedValue.propertyType != SerializedPropertyType.ManagedReference)
+                    continue;
 
-            CopyObjectReferences(originalSnapshot, inserted);
+                insertedValue.managedReferenceValue = copy;
+                insertedValue.isExpanded = expanded;
 
-            if (!ReferenceEquals(inserted, insertedValue))
-                StableRefEntry.Sync(inserted);
+                CopyObjectReferences(originalSnapshot, inserted);
 
-            so.ApplyModifiedProperties();
+                if (!ReferenceEquals(inserted, insertedValue))
+                    StableRefEntry.Sync(inserted);
+
+                so.ApplyModifiedProperties();
+            }
+
+            StableRefMultiEdit.Invalidate();
+            StableRefListDrawer.InvalidateCache();
         }
 
         private static void CopyObjectReferences(SerializedProperty source, SerializedProperty dest)
