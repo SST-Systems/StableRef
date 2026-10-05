@@ -271,8 +271,10 @@ namespace SST.StableRef
                 var wrapper = StableRefEntry.FindWrapperOfValue(so, valuePath);
                 if (wrapper == null) continue;
 
+                long oldId = wrapper.FindPropertyRelative(StableRefEntry.ValueFieldName).managedReferenceId;
                 StableRefEntry.Clear(wrapper);
                 so.ApplyModifiedProperties();
+                StableRefEntry.ClearNativeMissingData(target, oldId);
                 EditorUtility.SetDirty(target);
             }
 

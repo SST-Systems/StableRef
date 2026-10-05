@@ -95,8 +95,7 @@ namespace SST.StableRef
 
                 int savedIndent = EditorGUI.indentLevel;
                 EditorGUI.indentLevel = 0;
-                using (new EditorGUI.DisabledScope(hasBroken))
-                    list.DoList(new Rect(position.x, y, position.width, list.GetHeight()));
+                list.DoList(new Rect(position.x, y, position.width, list.GetHeight()));
                 EditorGUI.indentLevel = savedIndent;
             }
 

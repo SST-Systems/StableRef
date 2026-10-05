@@ -92,8 +92,7 @@ namespace SST.StableRef
             options.LabelOverride = StableRefEntry.BuildMissingLabel(property);
             options.LabelColor = StableRefEntry.MissingLabelColor;
 
-            using (new EditorGUI.DisabledScope(true))
-                StableRefSelectorField.Draw(controlRect, valueProp, GUIContent.none, options);
+            StableRefSelectorField.Draw(controlRect, valueProp, GUIContent.none, options);
 
             if (EnabledButton(btnRect, EditorGUIUtility.IconContent("console.warnicon.sml")))
                 DoRecreate(property);

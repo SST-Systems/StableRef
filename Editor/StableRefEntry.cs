@@ -48,6 +48,34 @@ namespace SST.StableRef
             return wrapper;
         }
 
+        /// <summary>
+        /// True when <paramref name="valueProp"/> holds recoverable data but no value: a StableRef entry in the
+        /// missing state, or a plain <c>[SerializeReference]</c> whose class can't be loaded.
+        /// </summary>
+        internal static bool HoldsMissingData(SerializedObject so, SerializedProperty valueProp)
+        {
+            if (valueProp.managedReferenceValue != null) return false;
+            if (valueProp.managedReferenceId != StableRefEditorUtility.ManagedRefIdNull) return true;
+            var wrapper = FindWrapperOfValue(so, valueProp.propertyPath);
+            return wrapper != null && IsMissing(wrapper);
+        }
+
+        /// <summary>
+        /// Drops Unity's native missing-type record <paramref name="refId"/> of <paramref name="target"/> once
+        /// nothing references it any more — the explicit-discard counterpart of keeping it for recovery.
+        /// </summary>
+        internal static void ClearNativeMissingData(UnityEngine.Object target, long refId)
+        {
+            if (refId == StableRefEditorUtility.ManagedRefIdNull) return;
+            if (!SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
+            foreach (var missing in SerializationUtility.GetManagedReferencesWithMissingTypes(target))
+            {
+                if (missing.referenceId != refId) continue;
+                SerializationUtility.ClearManagedReferenceWithMissingType(target, refId);
+                return;
+            }
+        }
+
         /// <summary>Content color the built-in drawer uses for a missing entry's label.</summary>
         public static readonly Color MissingLabelColor = new Color(0.65f, 0.65f, 0.65f);
 
