@@ -33,7 +33,7 @@ namespace SST.StableRef
 
         private static readonly Dictionary<(Type, string), PathResolution> _pathCache = new();
         private static readonly Dictionary<string, Type> _managedRefBaseCache = new();
-        private static readonly Dictionary<Type, TypeEntry[]> _typeCache = new();
+        private static readonly Dictionary<(Type, bool), TypeEntry[]> _typeCache = new();
 
         public static bool IsStableRefValueField(SerializedProperty property)
         {
@@ -48,7 +48,7 @@ namespace SST.StableRef
         }
 
         public static SerializedProperty GetStableRefListItems(SerializedProperty property)
-            => property.FindPropertyRelative("_items");
+            => property.FindPropertyRelative(StableRefEntry.ListItemsFieldName);
 
         /// <summary>
         /// Sets <paramref name="property"/> and every descendant that has visible children to the same
@@ -119,7 +119,7 @@ namespace SST.StableRef
             if (arrayProp.arraySize > 0)
             {
                 var first = arrayProp.GetArrayElementAtIndex(0);
-                var refProp = isStable ? first.FindPropertyRelative("Value") : first;
+                var refProp = isStable ? first.FindPropertyRelative(StableRefEntry.ValueFieldName) : first;
                 if (refProp != null && refProp.propertyType == SerializedPropertyType.ManagedReference)
                 {
                     var t = GetBaseType(refProp);
@@ -152,6 +152,13 @@ namespace SST.StableRef
             return !string.IsNullOrEmpty(et) && et.StartsWith(ManagedRefPrefix, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// The array / list that <paramref name="property"/> is an element of — either the element itself
+        /// (<c>…Array.data[i]</c>, a plain <c>[SerializeReference]</c> element) or the <c>Value</c> of a StableRef
+        /// element (<c>…Array.data[i].Value</c>). A reference nested deeper inside an element's value — including a
+        /// plain field that happens to be named <c>Value</c> on a non-StableRef element — is not an element of that
+        /// array, so element commands (duplicate, delete, insert) never act on the outer list.
+        /// </summary>
         public static bool TryGetParentArray(SerializedProperty property, out SerializedProperty array, out int index)
         {
             array = null;
@@ -164,6 +171,13 @@ namespace SST.StableRef
             int openBracket = path.IndexOf('[', arrayMarker);
             int closeBracket = path.IndexOf(']', openBracket + 1);
             if (openBracket < 0 || closeBracket < 0) return false;
+
+            string rest = path.Substring(closeBracket + 1);
+            if (rest.Length != 0)
+            {
+                if (rest != "." + StableRefEntry.ValueFieldName) return false;
+                if (StableRefEntry.FindWrapperOfValue(property.serializedObject, path) == null) return false;
+            }
 
             string idxStr = path.Substring(openBracket + 1, closeBracket - openBracket - 1);
             if (!int.TryParse(idxStr, out index)) return false;
@@ -213,6 +227,15 @@ namespace SST.StableRef
         }
 
         public static TypeEntry[] GetEntries(SerializedProperty property)
+            => GetEntries(property, requireStableId: true);
+
+        /// <summary>
+        /// Selector entries for <paramref name="property"/>: instantiable reference types assignable to its
+        /// base type, plus open generics closed with the field's arguments. With
+        /// <paramref name="requireStableId"/> types that have no stable id are left out (StableRef fields);
+        /// without it every candidate is offered (<see cref="RefSelectorAttribute"/> fields).
+        /// </summary>
+        public static TypeEntry[] GetEntries(SerializedProperty property, bool requireStableId)
         {
             var baseType = GetBaseType(property);
 
@@ -222,7 +245,7 @@ namespace SST.StableRef
                 && (baseType == typeof(object) || baseType.IsAssignableFrom(reflected) || reflected.IsAssignableFrom(baseType)))
                 baseType = reflected;
 
-            if (_typeCache.TryGetValue(baseType, out var cached)) return cached;
+            if (_typeCache.TryGetValue((baseType, requireStableId), out var cached)) return cached;
 
             var result = new List<TypeEntry>();
 
@@ -234,9 +257,9 @@ namespace SST.StableRef
             {
                 if (t.IsAbstract || t.IsInterface || t.IsGenericTypeDefinition || !baseType.IsAssignableFrom(t)) continue;
                 if (!IsInstantiableReferenceValue(t)) continue;
-                if (StableRefTypeRegistry.GetOrAssignId(t) == null) continue;
+                if (requireStableId && StableRefTypeRegistry.GetOrAssignId(t) == null) continue;
 
-                var cat = t.GetCustomAttribute<StableRefCategoryAttribute>();
+                var cat = t.GetCustomAttribute<RefCategoryAttribute>();
                 string catS = cat?.Category ?? "";
                 string fullPath = string.IsNullOrEmpty(catS) ? t.Name : $"{catS}/{t.Name}";
 
@@ -254,9 +277,9 @@ namespace SST.StableRef
                 foreach (var closed in StableRefGenericUtils.CollectClosedGenericCandidates(baseType))
                 {
                     if (!IsInstantiableReferenceValue(closed)) continue;
-                    if (StableRefTypeRegistry.GetOrAssignId(closed) == null) continue;
+                    if (requireStableId && StableRefTypeRegistry.GetOrAssignId(closed) == null) continue;
 
-                    var gcat = closed.GetCustomAttribute<StableRefCategoryAttribute>();
+                    var gcat = closed.GetCustomAttribute<RefCategoryAttribute>();
                     string gcatS = gcat?.Category ?? "";
                     string gname = StableRefGenericUtils.DisplayName(closed);
                     string gfullPath = string.IsNullOrEmpty(gcatS) ? gname : $"{gcatS}/{gname}";
@@ -275,7 +298,7 @@ namespace SST.StableRef
             result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
 
             var arr = result.ToArray();
-            _typeCache[baseType] = arr;
+            _typeCache[(baseType, requireStableId)] = arr;
             return arr;
         }
 
@@ -366,7 +389,7 @@ namespace SST.StableRef
             {
                 int loaderCount = ex.LoaderExceptions?.Length ?? 0;
                 Debug.LogWarning(
-                    $"[StableRefSelector] Couldn't fully load types from assembly '{a.GetName().Name}'. " +
+                    $"[StableRef] Couldn't fully load types from assembly '{a.GetName().Name}'. " +
                     $"Loader exceptions: {loaderCount}. Returning the partial set so the dropdown still works.");
                 if (ex.Types == null) return Array.Empty<Type>();
 
@@ -384,7 +407,7 @@ namespace SST.StableRef
             catch (Exception ex)
             {
                 Debug.LogWarning(
-                    $"[StableRefSelector] Couldn't load types from assembly '{a.GetName().Name}': {ex.Message}");
+                    $"[StableRef] Couldn't load types from assembly '{a.GetName().Name}': {ex.Message}");
                 return Array.Empty<Type>();
             }
         }
@@ -473,7 +496,7 @@ namespace SST.StableRef
                 ValueType = currType,
                 RawFieldType = rawType,
                 IsStableRefValue = field != null
-                    && field.Name == "Value"
+                    && field.Name == StableRefEntry.ValueFieldName
                     && field.DeclaringType != null
                     && field.DeclaringType.IsGenericType
                     && field.DeclaringType.GetGenericTypeDefinition() == typeof(StableRef<>)

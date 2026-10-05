@@ -13,13 +13,13 @@ namespace SST.StableRef
     /// (e.g. <c>"my-package.damage-on-hit"</c>) to avoid collisions.
     /// </remarks>
     [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Interface)]
-    public sealed class StableTypeIdAttribute : Attribute
+    public sealed class RefTypeIdAttribute : Attribute
     {
         /// <summary>The stable identifier stored in serialized data and used to resolve the type.</summary>
         public string Id { get; }
 
         /// <summary>Declares the type's stable identifier.</summary>
         /// <param name="id">A project-unique, namespaced string that must never change once in use.</param>
-        public StableTypeIdAttribute(string id) => Id = id;
+        public RefTypeIdAttribute(string id) => Id = id;
     }
 }

@@ -19,8 +19,6 @@ namespace SST.StableRef
     /// </remarks>
     public static class StableRefBackup
     {
-        private const string ValueFieldName = "Value";
-
         /// <summary>
         /// Refreshes the snapshot of a StableRef entry from the value it currently holds. Does nothing when
         /// the entry holds no value, since there is nothing to capture.
@@ -58,7 +56,7 @@ namespace SST.StableRef
 
         private static bool TryGetValueProperty(SerializedProperty entryProperty, out SerializedProperty valueProperty)
         {
-            valueProperty = entryProperty?.FindPropertyRelative(ValueFieldName);
+            valueProperty = entryProperty?.FindPropertyRelative(StableRefEntry.ValueFieldName);
 
             return valueProperty != null && valueProperty.propertyType == SerializedPropertyType.ManagedReference;
         }

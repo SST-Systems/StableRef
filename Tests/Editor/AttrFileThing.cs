@@ -7,7 +7,7 @@ namespace SST.StableRef.Tests
     /// while also carrying an explicit id — used to verify the attribute id stays canonical.
     /// </summary>
     [Serializable]
-    [StableTypeId("stableref-tests.attr-file")]
+    [RefTypeId("stableref-tests.attr-file")]
     public class AttrFileThing : ITestThing
     {
         public int Payload;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace SST.StableRef
 {
@@ -11,11 +12,12 @@ namespace SST.StableRef
     {
         private static readonly Dictionary<(long, string), ReorderableList> _cache = new();
         private static readonly Dictionary<(long, string), bool> _brokenMemo = new();
+        private static readonly Dictionary<ReorderableList, Dictionary<int, Rect>> _rowRects = new();
 
         [InitializeOnLoadMethod]
         private static void HookCacheEviction()
         {
-            Selection.selectionChanged += () => { _cache.Clear(); _brokenMemo.Clear(); };
+            Selection.selectionChanged += () => { _cache.Clear(); _brokenMemo.Clear(); _rowRects.Clear(); };
             EditorApplication.update += _brokenMemo.Clear;
         }
 
@@ -26,11 +28,15 @@ namespace SST.StableRef
         /// reused list keeps reporting a stale height after an expand/collapse. Call this whenever a
         /// StableRef / StableRefList foldout is toggled so the affected lists re-measure.
         /// </summary>
-        internal static void InvalidateCache() => _cache.Clear();
+        internal static void InvalidateCache()
+        {
+            _cache.Clear();
+            _rowRects.Clear();
+        }
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
-            var itemsProp = property.FindPropertyRelative("_items");
+            var itemsProp = property.FindPropertyRelative(StableRefEntry.ListItemsFieldName);
             if (itemsProp == null)
             {
                 EditorGUI.PropertyField(position, property, label, true);
@@ -95,8 +101,8 @@ namespace SST.StableRef
 
                 int savedIndent = EditorGUI.indentLevel;
                 EditorGUI.indentLevel = 0;
-                using (new EditorGUI.DisabledScope(hasBroken))
-                    list.DoList(new Rect(position.x, y, position.width, list.GetHeight()));
+                list.DoList(new Rect(position.x, y, position.width, list.GetHeight()));
+                HandleRowContextClick(list);
                 EditorGUI.indentLevel = savedIndent;
             }
 
@@ -105,7 +111,7 @@ namespace SST.StableRef
 
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
         {
-            var itemsProp = property.FindPropertyRelative("_items");
+            var itemsProp = property.FindPropertyRelative(StableRefEntry.ListItemsFieldName);
             if (itemsProp == null)
                 return EditorGUI.GetPropertyHeight(property, label, true);
 
@@ -148,6 +154,7 @@ namespace SST.StableRef
             rl.drawElementCallback = (rect, index, _, _) =>
             {
                 if (index >= rl.serializedProperty.arraySize) return;
+                RowRects(rl)[index] = rect;
                 const float LeftPad = 12f;
                 var elem = rl.serializedProperty.GetArrayElementAtIndex(index);
                 EditorGUI.PropertyField(
@@ -178,10 +185,83 @@ namespace SST.StableRef
                 list.index = arrayProp.arraySize - 1;
             };
 
+            rl.onRemoveCallback = list =>
+            {
+                var so = list.serializedProperty.serializedObject;
+                var releaseTargets = TargetsRemovingMissing(list);
+                ReorderableList.defaultBehaviours.DoRemoveButton(list);
+                so.ApplyModifiedProperties();
+                foreach (var target in releaseTargets)
+                    StableRefEntry.ReleaseMissingData(target);
+                StableRefMultiEdit.Invalidate();
+            };
+
             return rl;
         }
 
+        /// <summary>
+        /// Targets on which one of the elements about to be removed is a missing entry. Only removing such an
+        /// element releases native missing-type data — removing a healthy element never touches it.
+        /// </summary>
+        private static List<Object> TargetsRemovingMissing(ReorderableList list)
+        {
+            var indices = new HashSet<int>(list.selectedIndices);
+            if (indices.Count == 0 && list.index >= 0) indices.Add(list.index);
+
+            var result = new List<Object>();
+            string arrayPath = list.serializedProperty.propertyPath;
+            foreach (var target in list.serializedProperty.serializedObject.targetObjects)
+            {
+                if (target == null) continue;
+
+                var so = new SerializedObject(target);
+                var arr = so.FindProperty(arrayPath);
+                if (arr == null) continue;
+
+                foreach (int i in indices)
+                {
+                    if (i < 0 || i >= arr.arraySize) continue;
+                    var value = arr.GetArrayElementAtIndex(i).FindPropertyRelative(StableRefEntry.ValueFieldName);
+                    if (value == null || value.propertyType != SerializedPropertyType.ManagedReference) continue;
+                    if (!StableRefEntry.HoldsMissingData(so, value)) continue;
+
+                    result.Add(target);
+                    break;
+                }
+            }
+            return result;
+        }
+
         private static void ResetElement(SerializedProperty elem) => StableRefEntry.Clear(elem);
+
+        private static Dictionary<int, Rect> RowRects(ReorderableList list)
+        {
+            if (!_rowRects.TryGetValue(list, out var rects)) _rowRects[list] = rects = new Dictionary<int, Rect>();
+            return rects;
+        }
+
+        /// <summary>
+        /// A context click on an element row that no control inside it consumed — the drag handle, the row
+        /// padding — opens that element's menu instead of falling through to the whole list's menu.
+        /// </summary>
+        private static void HandleRowContextClick(ReorderableList list)
+        {
+            var ev = Event.current;
+            if (ev.type != EventType.ContextClick || !_rowRects.TryGetValue(list, out var rects)) return;
+
+            foreach (var pair in rects)
+            {
+                var rect = pair.Value;
+                if (ev.mousePosition.y < rect.yMin || ev.mousePosition.y >= rect.yMax) continue;
+                if (pair.Key >= list.serializedProperty.arraySize) return;
+
+                var elem = list.serializedProperty.GetArrayElementAtIndex(pair.Key);
+                var valueProp = elem.FindPropertyRelative(StableRefEntry.ValueFieldName);
+                var rowRect = new Rect(ev.mousePosition.x - 1f, rect.y, 2f, rect.height);
+                StableRefContextMenu.HandleElementContextClick(rowRect, valueProp);
+                return;
+            }
+        }
 
         private static bool HasBrokenRefs(SerializedProperty itemsProp)
         {
@@ -192,9 +272,9 @@ namespace SST.StableRef
             for (int i = 0; i < itemsProp.arraySize; i++)
             {
                 var elem = itemsProp.GetArrayElementAtIndex(i);
-                var typeIdProp = elem.FindPropertyRelative("TypeId");
+                var typeIdProp = elem.FindPropertyRelative(StableRefEntry.TypeIdFieldName);
                 if (typeIdProp == null || string.IsNullOrEmpty(typeIdProp.stringValue)) continue;
-                if (elem.FindPropertyRelative("Value")?.managedReferenceValue == null)
+                if (elem.FindPropertyRelative(StableRefEntry.ValueFieldName)?.managedReferenceValue == null)
                 {
                     broken = true;
                     break;

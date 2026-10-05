@@ -1,15 +1,18 @@
 #if UNITY_EDITOR
-using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 
 namespace SST.StableRef
 {
+    /// <summary>
+    /// Property drawer for <see cref="StableRefBase"/> (<see cref="StableRef{T}"/> fields and
+    /// <see cref="StableRefList{T}"/> elements): the shared selector field plus the StableRef-specific parts —
+    /// id / snapshot sync, the missing-entry state with its fix button, and the find-script button.
+    /// </summary>
     [CustomPropertyDrawer(typeof(StableRefBase), useForChildren: true)]
     public sealed class StableRefHandler : PropertyDrawer
     {
-        internal static GUIContent BrokenLabelOverride;
-        internal static Color? BrokenColorOverride;
+        private const float BtnW = 22f;
 
         private static GUIStyle _pingStyle;
         private static GUIStyle PingStyle => _pingStyle ??= new GUIStyle(EditorStyles.miniButton)
@@ -19,9 +22,7 @@ namespace SST.StableRef
         {
             EditorGUI.BeginProperty(position, label, property);
 
-            var valueProp = property.FindPropertyRelative("Value");
-            var typeIdProp = property.FindPropertyRelative("TypeId");
-
+            var valueProp = property.FindPropertyRelative(StableRefEntry.ValueFieldName);
             if (valueProp == null)
             {
                 EditorGUI.HelpBox(position, "StableRef: 'Value' field not found.", MessageType.Error);
@@ -29,240 +30,111 @@ namespace SST.StableRef
                 return;
             }
 
-            bool hasValue = valueProp.managedReferenceValue != null;
-            bool hasTypeId = !string.IsNullOrEmpty(typeIdProp?.stringValue);
+            var options = new StableRefSelectorField.Options { RequireStableId = true };
 
-            float h = EditorGUIUtility.singleLineHeight;
-
-            if (hasValue)
+            if (StableRefMultiEdit.IsMixed(valueProp, property.propertyPath))
             {
-                StableRefEntry.Sync(property);
-
-                const float BtnW = 22f;
-                var fieldRect = new Rect(position.x, position.y, position.width - BtnW - 2f, position.height);
-                var btnRect   = new Rect(position.xMax - BtnW, position.y, BtnW, h);
-
-                EditorGUI.BeginChangeCheck();
-                DrawSelector(fieldRect, valueProp, label);
-                if (EditorGUI.EndChangeCheck())
-                    StableRefSnapshotCodec.Capture(property, valueProp);
-
-                bool prev = GUI.enabled;
-                GUI.enabled = true;
-                if (GUI.Button(btnRect, StableRefEditorUtility.Icon("d_Search Icon"), PingStyle))
-                    StableRefEditorUtility.PingScript(valueProp.managedReferenceValue?.GetType());
-                GUI.enabled = prev;
+                options.Mixed = true;
+                StableRefSelectorField.Draw(position, valueProp, label, options);
             }
-            else if (hasTypeId)
+            else if (valueProp.managedReferenceValue != null)
             {
-                const float BtnW = 22f;
-                var lineRect = new Rect(position.x, position.y, position.width - BtnW - 2f, h);
-                var controlRect = label != GUIContent.none
-                    ? EditorGUI.PrefixLabel(lineRect, label)
-                    : lineRect;
-                var btnRect = new Rect(position.xMax - BtnW, position.y, BtnW, h);
-
-                BrokenLabelOverride = StableRefEntry.BuildMissingLabel(property);
-                BrokenColorOverride = StableRefEntry.MissingLabelColor;
-
-                using (new EditorGUI.DisabledScope(true))
-                    DrawSelector(controlRect, valueProp, GUIContent.none);
-
-                bool prevEnabled = GUI.enabled;
-                GUI.enabled = true;
-                if (GUI.Button(btnRect, EditorGUIUtility.IconContent("console.warnicon.sml"), PingStyle))
-                    DoRecreate(property);
-                GUI.enabled = prevEnabled;
+                DrawValue(position, property, valueProp, label, options);
+            }
+            else if (StableRefEntry.IsMissing(property))
+            {
+                DrawMissing(position, property, valueProp, label, options);
             }
             else
             {
-                DrawSelector(position, valueProp, label);
+                StableRefSelectorField.Draw(position, valueProp, label, options);
             }
 
+            StableRefContextMenu.HandleElementContextClick(position, valueProp);
             EditorGUI.EndProperty();
         }
 
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
         {
-            var valueProp = property.FindPropertyRelative("Value");
-            var typeIdProp = property.FindPropertyRelative("TypeId");
-
-            if (valueProp == null) return EditorGUIUtility.singleLineHeight;
-
-            bool hasValue = valueProp.managedReferenceValue != null;
-            bool hasTypeId = !string.IsNullOrEmpty(typeIdProp?.stringValue);
-
-            if (hasValue) return GetSelectorHeight(valueProp);
-            if (hasTypeId) return EditorGUIUtility.singleLineHeight;
-            return GetSelectorHeight(valueProp);
+            var valueProp = property.FindPropertyRelative(StableRefEntry.ValueFieldName);
+            if (valueProp == null || StableRefEntry.IsMissing(property)) return EditorGUIUtility.singleLineHeight;
+            return StableRefSelectorField.GetHeight(valueProp, StableRefMultiEdit.IsMixed(valueProp, property.propertyPath));
         }
 
-        private static void DrawSelector(Rect position, SerializedProperty property, GUIContent label)
+        private static void DrawValue(Rect position, SerializedProperty property, SerializedProperty valueProp,
+            GUIContent label, StableRefSelectorField.Options options)
         {
-            var brokenLabel = BrokenLabelOverride;
-            BrokenLabelOverride = null;
-            Color? brokenColor = BrokenColorOverride;
-            BrokenColorOverride = null;
+            bool multi = property.serializedObject.isEditingMultipleObjects;
+            if (!multi) StableRefEntry.Sync(property);
 
-            if (property.propertyType != SerializedPropertyType.ManagedReference)
+            var fieldRect = new Rect(position.x, position.y, position.width - BtnW - 2f, position.height);
+            var btnRect = new Rect(position.xMax - BtnW, position.y, BtnW, EditorGUIUtility.singleLineHeight);
+
+            EditorGUI.BeginChangeCheck();
+            StableRefSelectorField.Draw(fieldRect, valueProp, label, options);
+            if (EditorGUI.EndChangeCheck())
             {
-                EditorGUI.HelpBox(position, "StableRef selector works only with [SerializeReference].", MessageType.Error);
-                return;
+                if (multi) StableRefMultiEdit.CaptureAllTargets(property);
+                else StableRefSnapshotCodec.Capture(property, valueProp);
             }
 
-            bool hasValue = property.managedReferenceValue != null;
-            var line = new Rect(position.x, position.y, position.width, EditorGUIUtility.singleLineHeight);
-
-            const float FoldoutW = 4f;
-
-            var ev = Event.current;
-            if (line.Contains(ev.mousePosition) &&
-                (ev.type == EventType.ContextClick ||
-                 (ev.type == EventType.MouseDown && ev.button == 1)))
-            {
-                StableRefContextMenu.ShowDirectMenu(property);
-                ev.Use();
-                return;
-            }
-
-            bool hasLabel = label != GUIContent.none && !string.IsNullOrEmpty(label.text);
-            var controlLine = hasLabel
-                ? EditorGUI.PrefixLabel(line, TruncatedLabel(label, EditorGUIUtility.labelWidth - 12f))
-                : line;
-
-            float btnX = hasLabel ? controlLine.x : controlLine.x + FoldoutW;
-            float btnW = hasLabel ? controlLine.width : controlLine.width - FoldoutW;
-
-            bool hasChildren = hasValue && HasVisibleChildren(property);
-            if (hasChildren)
-            {
-                float foldoutX = hasLabel ? controlLine.x - 4f : controlLine.x;
-                int prevIndent = EditorGUI.indentLevel;
-                EditorGUI.indentLevel = 0;
-                EditorGUI.BeginChangeCheck();
-                bool expanded = EditorGUI.Foldout(
-                    new Rect(foldoutX, controlLine.y, FoldoutW, controlLine.height), property.isExpanded, GUIContent.none, true);
-                EditorGUI.indentLevel = prevIndent;
-                if (EditorGUI.EndChangeCheck())
-                {
-                    if (ev.alt)
-                        StableRefPropertyUtils.SetExpandedRecursive(property, expanded);
-                    else
-                        property.isExpanded = expanded;
-                    StableRefListDrawer.InvalidateCache();
-                }
-            }
-
-            var btnRect = new Rect(btnX, controlLine.y, btnW, controlLine.height);
-
-            GUIContent buttonLabel = brokenLabel ?? new GUIContent(GetCurrentLabel(property));
-
-            var prevColor = GUI.contentColor;
-            if (brokenColor.HasValue) GUI.contentColor = brokenColor.Value;
-
-            bool clicked = GUI.Button(btnRect, buttonLabel, EditorStyles.popup);
-            GUI.contentColor = prevColor;
-            if (clicked)
-                StableRefSelectorWindow.Show(btnRect, property, StableRefPropertyUtils.GetEntries(property));
-
-            if (hasChildren && property.isExpanded)
-            {
-                float yOff = EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
-                EditorGUI.indentLevel++;
-                DrawChildren(new Rect(position.x, position.y + yOff, position.width, position.height - yOff), property);
-                EditorGUI.indentLevel--;
-            }
+            if (EnabledButton(btnRect, StableRefEditorUtility.Icon("Search Icon")))
+                StableRefEditorUtility.PingScript(valueProp.managedReferenceValue?.GetType());
         }
 
-        private static float GetSelectorHeight(SerializedProperty property)
+        private static void DrawMissing(Rect position, SerializedProperty property, SerializedProperty valueProp,
+            GUIContent label, StableRefSelectorField.Options options)
         {
-            if (property.propertyType != SerializedPropertyType.ManagedReference)
-                return EditorGUIUtility.singleLineHeight;
-
             float h = EditorGUIUtility.singleLineHeight;
+            var lineRect = new Rect(position.x, position.y, position.width - BtnW - 2f, h);
+            var controlRect = label != GUIContent.none ? EditorGUI.PrefixLabel(lineRect, label) : lineRect;
+            var btnRect = new Rect(position.xMax - BtnW, position.y, BtnW, h);
 
-            if (property.managedReferenceValue != null && property.isExpanded)
-            {
-                var child = property.Copy();
-                var end = property.GetEndProperty();
-                if (child.NextVisible(true))
-                    while (!SerializedProperty.EqualContents(child, end))
-                    {
-                        h += EditorGUI.GetPropertyHeight(child, true) + EditorGUIUtility.standardVerticalSpacing;
-                        if (!child.NextVisible(false)) break;
-                    }
-            }
+            options.LabelOverride = StableRefEntry.BuildMissingLabel(property);
+            options.LabelColor = StableRefEntry.MissingLabelColor;
 
-            return h;
-        }
+            StableRefSelectorField.Draw(controlRect, valueProp, GUIContent.none, options);
 
-        private static bool HasVisibleChildren(SerializedProperty property)
-        {
-            var child = property.Copy();
-            var end = property.GetEndProperty();
-            return child.NextVisible(true) && !SerializedProperty.EqualContents(child, end);
-        }
-
-        private static string GetCurrentLabel(SerializedProperty property)
-        {
-            if (property.managedReferenceValue == null) return "None";
-            var t = property.managedReferenceValue.GetType();
-            var cat = t.GetCustomAttribute<StableRefCategoryAttribute>();
-            return cat != null && StableRefSelectorWindow.ShowCategoryInLabel
-                ? $"{cat.Category}/{StableRefGenericUtils.DisplayName(t)}"
-                : StableRefGenericUtils.DisplayName(t);
-        }
-
-        private static GUIContent TruncatedLabel(GUIContent label, float maxWidth)
-        {
-            var style = EditorStyles.label;
-            if (style.CalcSize(label).x <= maxWidth) return label;
-            float ellipsisW = style.CalcSize(new GUIContent("...")).x;
-            var text = label.text;
-            while (text.Length > 0 && style.CalcSize(new GUIContent(text)).x + ellipsisW > maxWidth)
-                text = text.Substring(0, text.Length - 1);
-            return new GUIContent(text + "...", label.tooltip);
-        }
-
-        private static void DrawChildren(Rect rect, SerializedProperty property)
-        {
-            var child = property.Copy();
-            var end = property.GetEndProperty();
-            float y = rect.y;
-            if (!child.NextVisible(true)) return;
-            while (!SerializedProperty.EqualContents(child, end))
-            {
-                float h = EditorGUI.GetPropertyHeight(child, true);
-                EditorGUI.PropertyField(new Rect(rect.x, y, rect.width, h), child, true);
-                y += h + EditorGUIUtility.standardVerticalSpacing;
-                if (!child.NextVisible(false)) break;
-            }
+            if (EnabledButton(btnRect, EditorGUIUtility.IconContent("console.warnicon.sml")))
+                DoRecreate(property);
         }
 
         private static void DoRecreate(SerializedProperty wrapperProp)
         {
-            var target = wrapperProp.serializedObject.targetObject;
+            var targets = wrapperProp.serializedObject.targetObjects;
             var wrapperPath = wrapperProp.propertyPath;
-            var assetPath = AssetDatabase.GetAssetPath(target);
 
             EditorApplication.delayCall += () =>
             {
-                if (target == null) return;
-
-                int fixedCount = StableRefMissingTypesWindow.FixTarget(target, out int unresolved, wrapperPath);
-                if (fixedCount == 0)
+                int unresolvedTotal = 0;
+                foreach (var target in targets)
                 {
-                    if (unresolved > 0)
-                        Debug.LogWarning(
-                            "[StableRef] The entry's stable id no longer resolves to a type. It was kept " +
-                            "untouched — restore the type (or its [StableTypeId]), or right-click the field " +
-                            "and choose Clear Entry to discard it.");
-                    return;
+                    if (target == null) continue;
+
+                    int fixedCount = StableRefMissingTypesWindow.FixTarget(target, out int unresolved, wrapperPath);
+                    unresolvedTotal += unresolved;
+                    if (fixedCount > 0 && !string.IsNullOrEmpty(AssetDatabase.GetAssetPath(target)))
+                        AssetDatabase.SaveAssetIfDirty(target);
                 }
 
-                if (!string.IsNullOrEmpty(assetPath))
-                    AssetDatabase.SaveAssetIfDirty(target);
+                StableRefMultiEdit.Invalidate();
+
+                if (unresolvedTotal > 0)
+                    Debug.LogWarning(
+                        "[StableRef] The entry's stable id no longer resolves to a type. It was kept " +
+                        "untouched — restore the type (or its [RefTypeId]), or pick None / another type in " +
+                        "its selector (or delete the element) to discard it.");
             };
+        }
+
+        /// <summary>Side button that stays clickable inside a disabled (e.g. read-only) inspector.</summary>
+        private static bool EnabledButton(Rect rect, GUIContent content)
+        {
+            bool prev = GUI.enabled;
+            GUI.enabled = true;
+            bool clicked = GUI.Button(rect, content, PingStyle);
+            GUI.enabled = prev;
+            return clicked;
         }
     }
 }
