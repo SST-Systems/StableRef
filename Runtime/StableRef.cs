@@ -19,7 +19,7 @@ namespace SST.StableRef
     public abstract class StableRefBase
     {
         /// <summary>
-        /// Stable identifier of the concrete value type. Comes from <see cref="StableTypeIdAttribute"/>
+        /// Stable identifier of the concrete value type. Comes from <see cref="RefTypeIdAttribute"/>
         /// when present, otherwise from the value type's MonoScript GUID. This is what survives a
         /// class rename and lets the reference be resolved back to the correct type.
         /// </summary>
@@ -57,7 +57,7 @@ namespace SST.StableRef
     /// </summary>
     /// <typeparam name="T">
     /// Base type (usually an interface or abstract class) of the value the field can hold.
-    /// Concrete implementations should carry a <see cref="StableTypeIdAttribute"/> so their identity
+    /// Concrete implementations should carry a <see cref="RefTypeIdAttribute"/> so their identity
     /// is decoupled from the class name.
     /// </typeparam>
     /// <remarks>

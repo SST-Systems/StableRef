@@ -1,5 +1,33 @@
 # StableRef
 
+## 3.0.0 - 05.10.2026
+
+### Breaking
+
+- **Attributes renamed: `[StableTypeId]` → `[RefTypeId]`, `[StableRefCategory]` → `[RefCategory]`** (`StableTypeIdAttribute` → `RefTypeIdAttribute`, `StableRefCategoryAttribute` → `RefCategoryAttribute`). With `[RefSelector]` added, the attributes describe the referenced type for both selectors, not only `StableRef<T>`, so they share one `Ref…` prefix. The old names are removed — replace them in code (a project-wide find & replace of `StableTypeId` → `RefTypeId` and `StableRefCategory` → `RefCategory` is enough). **Serialized data is unaffected:** ids are stored by value, so every existing reference keeps resolving and no asset needs re-saving.
+- **Version-gated consumers must widen their range.** An asmdef that gates a define on `com.sst-systems.stableref` through `versionDefines` must change its expression from `[2.0.0,3.0)` to `[3.0.0,4.0)`.
+
+### Added
+
+- **`[RefSelector]` — the selector without the wrapper.** Mark a plain `[SerializeReference]` field with `[RefSelector]` to get the searchable type selector (categories, generic candidates, copy/paste) with no `StableRef<T>`, no stored id and no snapshot — the field stays a bare `[SerializeReference]`, and the attribute is `[Conditional("UNITY_EDITOR")]`, so nothing reaches player builds. Meant for ECS authoring/baking code, existing `[SerializeReference]` fields and large lists. It is opt-in at your own risk: no rename protection, and such fields are intentionally not covered by Find Usages or Fix Missing Types; a field whose class went missing shows `Missing (ClassName)` instead of `None`. Use `[MovedFrom]` for safe renames.
+- **Full keyboard navigation in the selector.** Categories are now part of the keyboard selection, and the arrows follow Unity's own tree views (Hierarchy / Project): `→` expands a collapsed category, otherwise jumps down to the next category; `←` collapses an expanded category, otherwise jumps to the parent (`Alt` for recursive); `Enter` picks the selected type or toggles the selected category, plus `PageUp` / `PageDown` / `Home` / `End`. The selector opens with the current type selected and scrolled into view, typing a search selects the first match, and the selection survives collapsing, clearing the search and resizing. Keys are handled before the search field, which used to swallow the arrow keys while focused.
+- **`StableRefPropertyUtils.GetEntries(property, requireStableId)`** — selector entries with or without the stable-id requirement.
+
+### Fixed
+
+- **Multi-object editing wrote the first object's metadata onto every selected object.** With several objects selected, the drawer stamped `TypeId` and refreshed the snapshot through the shared `SerializedObject`, so the first target's id, `ObjectRefs` and `ValuesData` were copied onto the others — after a class rename those objects would have been recovered with the first object's type and field values. Metadata is now synced and captured per target (one undo step with the edit).
+- **Mixed types in a multi-selection are shown as `—`.** The selector button used to show the first selected object's type even when the others held different types (or none / a missing type), inviting an accidental overwrite. It now shows `—` and doesn't expand the first object's fields; picking a type still applies to every target. Applies to `StableRef<T>`, `StableRefList<T>` elements and `[RefSelector]` fields. The per-target check is cached and refreshed on selection change, undo/redo and edits, not on every repaint.
+- **Icons on the light editor skin used the dark-skin art.** `StableRefEditorUtility.Icon` only fell back to the other variant when the requested one failed to load, but `d_` textures load fine on the light skin too — so the find-script (magnifier) button, the selector's settings gear and the scene / GameObject icons in the tool windows drew light-gray glyphs on light-gray buttons, barely visible. The variant is now picked from the current skin, whichever name the caller passes.
+- **Fixing StableRef entries no longer wipes other missing-type data on the same object.** After a fix, `ClearAllManagedReferencesWithMissingTypes` dropped *every* native missing-type record of the target, including plain `[SerializeReference]` fields whose class was renamed — silently destroying data that could still be recovered by restoring the class or adding `[MovedFrom]`. Only the references StableRef actually recreated are cleared now (`ClearManagedReferenceWithMissingType`).
+
+### Changed
+
+- **One selector field for every drawer.** The popup / foldout / children / context-menu field is now a single internal component used by both the `StableRef<T>` / `StableRefList<T>` drawer and the `[RefSelector]` drawer; they only add what is specific to them. The missing-entry label is passed per call instead of through static fields shared between drawers (the hand-off pattern behind the 2.0 "label leaks onto the next field" bug). No public API changed.
+- **Picking the type a field already holds keeps its value.** Choosing the current type (or None on an empty field) in the selector used to replace the value with a fresh default instance, silently resetting its fields; it is now a no-op for that object. With several objects holding different types the selector opens with nothing selected, so Enter can't apply the first object's type to the rest by accident.
+- **The per-field fix button repairs every selected object**, not only the first one, when several objects are selected.
+- The selector button label is cached per type instead of reflecting `[RefCategory]` on every repaint.
+- Editor code refers to serialized members only through the `StableRefEntry.*FieldName` constants, and every log message uses the `[StableRef]` prefix (some still said `[StableRefSelector]`).
+
 ## 2.0.1 - 17.09.2026
 
 ### Fixed

@@ -406,7 +406,7 @@ namespace SST.StableRef
                 {
                     Kind = NodeKind.Asset,
                     Label = string.IsNullOrEmpty(scene.name) ? "Untitled" : scene.name,
-                    Icon = StableRefEditorUtility.Icon("d_SceneAsset Icon").image,
+                    Icon = StableRefEditorUtility.Icon("SceneAsset Icon").image,
                     PingTarget = sceneAsset
                 };
                 foreach (var root in scene.GetRootGameObjects())
@@ -573,7 +573,7 @@ namespace SST.StableRef
             for (int i = 0; i < arrayProp.arraySize; i++)
             {
                 var elem = arrayProp.GetArrayElementAtIndex(i);
-                var valueProp = elem.FindPropertyRelative("Value");
+                var valueProp = elem.FindPropertyRelative(StableRefEntry.ValueFieldName);
                 if (valueProp == null || valueProp.managedReferenceValue == null) continue;
 
                 var item = BuildItemNode(valueProp, pingTarget);
@@ -620,8 +620,8 @@ namespace SST.StableRef
                     enter = false;
                 }
                 else if (iter.propertyType == SerializedPropertyType.Generic
-                         && iter.FindPropertyRelative("TypeId") != null
-                         && iter.FindPropertyRelative("Value") is
+                         && iter.FindPropertyRelative(StableRefEntry.TypeIdFieldName) != null
+                         && iter.FindPropertyRelative(StableRefEntry.ValueFieldName) is
                              { propertyType: SerializedPropertyType.ManagedReference } nestedValue)
                 {
                     if (nestedValue.managedReferenceValue != null)

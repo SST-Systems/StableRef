@@ -33,6 +33,21 @@ namespace SST.StableRef
         /// <summary>Name of the backing list field of a <see cref="StableRefList{T}"/>.</summary>
         public const string ListItemsFieldName = "_items";
 
+        /// <summary>
+        /// The entry that owns the <c>Value</c> property at <paramref name="valuePath"/>, or
+        /// <see langword="null"/> when the path is not a StableRef <c>Value</c> field (e.g. a plain
+        /// <c>[SerializeReference]</c> / <c>[RefSelector]</c> field).
+        /// </summary>
+        internal static SerializedProperty FindWrapperOfValue(SerializedObject so, string valuePath)
+        {
+            const string ValueSuffix = "." + ValueFieldName;
+            if (!valuePath.EndsWith(ValueSuffix, StringComparison.Ordinal)) return null;
+
+            var wrapper = so.FindProperty(valuePath.Substring(0, valuePath.Length - ValueSuffix.Length));
+            if (wrapper == null || wrapper.FindPropertyRelative(TypeIdFieldName) == null) return null;
+            return wrapper;
+        }
+
         /// <summary>Content color the built-in drawer uses for a missing entry's label.</summary>
         public static readonly Color MissingLabelColor = new Color(0.65f, 0.65f, 0.65f);
 

@@ -473,8 +473,8 @@ namespace SST.StableRef
             {
                 if (TryGetMissingWrapper(so, iter, out var wrapperProp))
                 {
-                    var typeIdProp = wrapperProp.FindPropertyRelative("TypeId");
-                    var dispProp = wrapperProp.FindPropertyRelative("TypeDisplayName");
+                    var typeIdProp = wrapperProp.FindPropertyRelative(StableRefEntry.TypeIdFieldName);
+                    var dispProp = wrapperProp.FindPropertyRelative(StableRefEntry.TypeDisplayNameFieldName);
                     var recoveredType = StableRefTypeRegistry.GetType(typeIdProp.stringValue);
 
                     result.Add(new MissingRefInfo
@@ -508,7 +508,7 @@ namespace SST.StableRef
 
                 int bracket = seg.IndexOf('[');
                 string baseName = bracket >= 0 ? seg.Substring(0, bracket) : seg;
-                if (baseName == "_items" || baseName == "Array" || baseName == "data") continue;
+                if (baseName == StableRefEntry.ListItemsFieldName || baseName == "Array" || baseName == "data") continue;
 
                 var prop = so.FindProperty(accumulated);
                 if (prop == null) continue;
@@ -559,7 +559,7 @@ namespace SST.StableRef
                         ? (string.IsNullOrEmpty(firstEntry.SceneName) ? "Untitled" : firstEntry.SceneName)
                         : System.IO.Path.GetFileNameWithoutExtension(assetPath),
                     Icon = isScene
-                        ? StableRefEditorUtility.Icon("d_SceneAsset Icon").image
+                        ? StableRefEditorUtility.Icon("SceneAsset Icon").image
                         : AssetDatabase.GetCachedIcon(assetPath),
                     PingTarget = assetObject,
                     AssetPath = assetPath
@@ -814,7 +814,7 @@ namespace SST.StableRef
                 Debug.LogWarning(
                     $"[StableRef] Skipped {unresolvedCount} entr{(unresolvedCount != 1 ? "ies" : "y")} whose stable id " +
                     "no longer resolves to a type. Their recovery data was preserved — restore the type (or its " +
-                    "[StableTypeId]) and re-run Fix All, or right-click the field and choose Clear Entry to discard.");
+                    "[RefTypeId]) and re-run Fix All, or right-click the field and choose Clear Entry to discard.");
             }
 
             if (skippedScenes > 0)
@@ -855,6 +855,7 @@ namespace SST.StableRef
         {
             int totalFixed = 0;
             unresolved = 0;
+            var replacedIds = new List<long>();
 
             for (int pass = 0; pass < MaxFixPasses; pass++)
             {
@@ -869,7 +870,12 @@ namespace SST.StableRef
                 {
                     var wrapper = so.FindProperty(path);
                     if (wrapper == null) continue;
-                    if (StableRefEntry.TryRecreate(wrapper)) fixedThisPass++;
+                    long oldId = wrapper.FindPropertyRelative(StableRefEntry.ValueFieldName).managedReferenceId;
+                    if (StableRefEntry.TryRecreate(wrapper))
+                    {
+                        fixedThisPass++;
+                        replacedIds.Add(oldId);
+                    }
                     else unresolved++;
                 }
 
@@ -880,14 +886,29 @@ namespace SST.StableRef
 
             if (totalFixed > 0)
             {
-                var soAfter = new SerializedObject(target);
-                soAfter.Update();
-                if (CollectMissingWrapperPaths(soAfter, null).Count == 0)
-                    SerializationUtility.ClearAllManagedReferencesWithMissingTypes(target);
+                ClearReplacedMissingReferences(target, replacedIds);
                 EditorUtility.SetDirty(target);
             }
 
             return totalFixed;
+        }
+
+        /// <summary>
+        /// Drops the native missing-type data only for the references StableRef has just recreated. Other
+        /// missing-type data on the object — e.g. a plain <c>[SerializeReference]</c> / <c>[RefSelector]</c>
+        /// field whose class was renamed — is not ours to discard and stays in the file.
+        /// </summary>
+        private static void ClearReplacedMissingReferences(UnityEngine.Object target, List<long> replacedIds)
+        {
+            if (replacedIds.Count == 0 || !SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
+
+            var missingIds = new HashSet<long>();
+            foreach (var missing in SerializationUtility.GetManagedReferencesWithMissingTypes(target))
+                missingIds.Add(missing.referenceId);
+
+            foreach (long id in replacedIds)
+                if (missingIds.Contains(id))
+                    SerializationUtility.ClearManagedReferenceWithMissingType(target, id);
         }
 
         private static List<string> CollectMissingWrapperPaths(SerializedObject so, string pathPrefix)
@@ -919,7 +940,7 @@ namespace SST.StableRef
         {
             wrapper = null;
             if (valueIter.propertyType != SerializedPropertyType.ManagedReference) return false;
-            if (valueIter.name != "Value") return false;
+            if (valueIter.name != StableRefEntry.ValueFieldName) return false;
             if (valueIter.managedReferenceValue != null) return false;
 
             string parentPath = ParentPath(valueIter.propertyPath);
@@ -928,9 +949,9 @@ namespace SST.StableRef
             var candidate = so.FindProperty(parentPath);
             if (candidate == null) return false;
 
-            var typeIdProp = candidate.FindPropertyRelative("TypeId");
+            var typeIdProp = candidate.FindPropertyRelative(StableRefEntry.TypeIdFieldName);
             if (typeIdProp == null || string.IsNullOrEmpty(typeIdProp.stringValue)) return false;
-            if (candidate.FindPropertyRelative("ValuesData") == null) return false;
+            if (candidate.FindPropertyRelative(StableRefEntry.ValuesDataFieldName) == null) return false;
 
             wrapper = candidate;
             return true;

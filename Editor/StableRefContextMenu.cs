@@ -143,7 +143,7 @@ namespace SST.StableRef
             if (!StableRefClipboard.HasValue) return;
             if (!StableRefPropertyUtils.IsAssignable(property, StableRefClipboard.ValueType))
             {
-                Debug.LogWarning($"[StableRefSelector] Cannot paste '{StableRefClipboard.ValueType.Name}' " +
+                Debug.LogWarning($"[StableRef] Cannot paste '{StableRefClipboard.ValueType.Name}' " +
                                  $"into '{StableRefPropertyUtils.GetBaseType(property).Name}'.");
                 return;
             }
@@ -162,11 +162,13 @@ namespace SST.StableRef
                 prop.isExpanded = true;
                 RestoreObjectReferences(prop, StableRefClipboard.ValueObjectRefs);
 
-                var wrapper = WrapperOf(so, path);
+                var wrapper = StableRefEntry.FindWrapperOfValue(so, path);
                 if (wrapper != null) StableRefEntry.Sync(wrapper);
 
                 so.ApplyModifiedProperties();
             }
+
+            StableRefMultiEdit.Invalidate();
         }
 
         private static void DuplicateValue(SerializedProperty property)
@@ -190,7 +192,7 @@ namespace SST.StableRef
 
             var insertedValue = inserted.propertyType == SerializedPropertyType.ManagedReference
                 ? inserted
-                : inserted.FindPropertyRelative("Value");
+                : inserted.FindPropertyRelative(StableRefEntry.ValueFieldName);
             if (insertedValue == null || insertedValue.propertyType != SerializedPropertyType.ManagedReference)
                 return;
 
@@ -236,7 +238,7 @@ namespace SST.StableRef
                 var so = new SerializedObject(target);
                 so.Update();
 
-                var wrapper = WrapperOf(so, valuePath);
+                var wrapper = StableRefEntry.FindWrapperOfValue(so, valuePath);
                 if (wrapper != null)
                 {
                     StableRefEntry.Clear(wrapper);
@@ -253,6 +255,8 @@ namespace SST.StableRef
 
                 so.ApplyModifiedProperties();
             }
+
+            StableRefMultiEdit.Invalidate();
         }
 
         private static void ClearEntry(SerializedProperty valueProperty)
@@ -264,28 +268,20 @@ namespace SST.StableRef
                 var so = new SerializedObject(target);
                 so.Update();
 
-                var wrapper = WrapperOf(so, valuePath);
+                var wrapper = StableRefEntry.FindWrapperOfValue(so, valuePath);
                 if (wrapper == null) continue;
 
                 StableRefEntry.Clear(wrapper);
                 so.ApplyModifiedProperties();
                 EditorUtility.SetDirty(target);
             }
-        }
 
-        private static SerializedProperty WrapperOf(SerializedObject so, string valuePath)
-        {
-            const string valueSuffix = ".Value";
-            if (!valuePath.EndsWith(valueSuffix, System.StringComparison.Ordinal)) return null;
-
-            var wrapper = so.FindProperty(valuePath.Substring(0, valuePath.Length - valueSuffix.Length));
-            if (wrapper == null || wrapper.FindPropertyRelative("TypeId") == null) return null;
-            return wrapper;
+            StableRefMultiEdit.Invalidate();
         }
 
         private static bool IsMissingEntry(SerializedProperty valueProperty)
         {
-            var wrapper = WrapperOf(valueProperty.serializedObject, valueProperty.propertyPath);
+            var wrapper = StableRefEntry.FindWrapperOfValue(valueProperty.serializedObject, valueProperty.propertyPath);
             return wrapper != null && StableRefEntry.IsMissing(wrapper);
         }
 
@@ -308,7 +304,7 @@ namespace SST.StableRef
 
                 if (isStable)
                 {
-                    refProp = elem.FindPropertyRelative("Value");
+                    refProp = elem.FindPropertyRelative(StableRefEntry.ValueFieldName);
                     value = refProp?.managedReferenceValue;
                 }
                 else
@@ -340,7 +336,7 @@ namespace SST.StableRef
                     || (!targetBaseType.IsAssignableFrom(clip.ElementBaseType)
                         && !clip.ElementBaseType.IsAssignableFrom(targetBaseType))))
             {
-                Debug.LogWarning($"[StableRefSelector] Cannot paste list of '{clip.ElementBaseType?.Name}' " +
+                Debug.LogWarning($"[StableRef] Cannot paste list of '{clip.ElementBaseType?.Name}' " +
                                  $"into '{targetBaseType?.Name}'.");
                 return;
             }
@@ -367,7 +363,7 @@ namespace SST.StableRef
                     if (isStable)
                     {
                         StableRefEntry.Clear(inserted);
-                        valueProp = inserted.FindPropertyRelative("Value");
+                        valueProp = inserted.FindPropertyRelative(StableRefEntry.ValueFieldName);
                         if (valueProp == null) continue;
                         valueProp.managedReferenceValue = clone;
                     }

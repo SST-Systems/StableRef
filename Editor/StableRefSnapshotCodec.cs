@@ -33,9 +33,9 @@ namespace SST.StableRef
         {
             if (valueProp.managedReferenceValue == null) return;
 
-            var objectRefsProp = entryProp.FindPropertyRelative("ObjectRefs");
-            var objectRefPathsProp = entryProp.FindPropertyRelative("ObjectRefPaths");
-            var valuesDataProp = entryProp.FindPropertyRelative("ValuesData");
+            var objectRefsProp = entryProp.FindPropertyRelative(StableRefEntry.ObjectRefsFieldName);
+            var objectRefPathsProp = entryProp.FindPropertyRelative(StableRefEntry.ObjectRefPathsFieldName);
+            var valuesDataProp = entryProp.FindPropertyRelative(StableRefEntry.ValuesDataFieldName);
             if (objectRefsProp == null || objectRefPathsProp == null || valuesDataProp == null) return;
 
             objectRefsProp.ClearArray();
@@ -98,9 +98,9 @@ namespace SST.StableRef
 
         internal static void Restore(SerializedProperty entryProp, SerializedProperty valueProp)
         {
-            var objectRefsProp = entryProp.FindPropertyRelative("ObjectRefs");
-            var objectRefPathsProp = entryProp.FindPropertyRelative("ObjectRefPaths");
-            var valuesDataProp = entryProp.FindPropertyRelative("ValuesData");
+            var objectRefsProp = entryProp.FindPropertyRelative(StableRefEntry.ObjectRefsFieldName);
+            var objectRefPathsProp = entryProp.FindPropertyRelative(StableRefEntry.ObjectRefPathsFieldName);
+            var valuesDataProp = entryProp.FindPropertyRelative(StableRefEntry.ValuesDataFieldName);
             if (valuesDataProp == null) return;
 
             string data = valuesDataProp.stringValue;

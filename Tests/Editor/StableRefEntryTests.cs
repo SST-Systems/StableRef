@@ -211,6 +211,24 @@ namespace SST.StableRef.Tests
             CollectionAssert.DoesNotContain(types, typeof(StructThing));
             CollectionAssert.DoesNotContain(types, typeof(MonoThing));
             CollectionAssert.DoesNotContain(types, typeof(NoCtorThing));
+            CollectionAssert.DoesNotContain(types, typeof(NoIdThing), "no stable id → not offered for StableRef");
+        }
+
+        [Test]
+        public void GetEntries_RefSelector_OffersTypesWithoutStableId()
+        {
+            var holder = NewHolder();
+            var so = new SerializedObject(holder);
+            var plain = so.FindProperty("Plain");
+            var types = StableRefPropertyUtils.GetEntries(plain, requireStableId: false).Select(e => e.Type).ToArray();
+
+            CollectionAssert.Contains(types, typeof(NoIdThing));
+            CollectionAssert.Contains(types, typeof(AlphaThing));
+            CollectionAssert.DoesNotContain(types, typeof(StructThing));
+            CollectionAssert.DoesNotContain(types, typeof(MonoThing));
+            CollectionAssert.DoesNotContain(types, typeof(NoCtorThing));
+            Assert.IsFalse(StableRefPropertyUtils.IsStableRefValueField(plain),
+                "[RefSelector] fields must stay invisible to Find Usages / Fix Missing Types");
         }
 
         [Test]

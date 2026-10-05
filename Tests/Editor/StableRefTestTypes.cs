@@ -22,7 +22,7 @@ namespace SST.StableRef.Tests
     }
 
     [Serializable]
-    [StableTypeId("stableref-tests.alpha")]
+    [RefTypeId("stableref-tests.alpha")]
     public class AlphaThing : ITestThing
     {
         public int Number;
@@ -39,32 +39,39 @@ namespace SST.StableRef.Tests
     }
 
     [Serializable]
-    [StableTypeId("stableref-tests.beta")]
+    [RefTypeId("stableref-tests.beta")]
     public class BetaThing : ITestThing
     {
         public int B;
     }
 
     [Serializable]
-    [StableTypeId("stableref-tests.struct")]
+    [RefTypeId("stableref-tests.struct")]
     public struct StructThing : ITestThing
     {
         public int S;
     }
 
-    [StableTypeId("stableref-tests.mono")]
+    [RefTypeId("stableref-tests.mono")]
     public class MonoThing : MonoBehaviour, ITestThing { }
 
     [Serializable]
-    [StableTypeId("stableref-tests.noctor")]
+    [RefTypeId("stableref-tests.noctor")]
     public class NoCtorThing : ITestThing
     {
         public NoCtorThing(int _) { }
+    }
+
+    [Serializable]
+    public class NoIdThing : ITestThing
+    {
+        public int N;
     }
 
     public class TestHolder : ScriptableObject
     {
         public StableRef<ITestThing> Ref = new();
         public StableRefList<ITestThing> List = new();
+        [SerializeReference, RefSelector] public ITestThing Plain;
     }
 }

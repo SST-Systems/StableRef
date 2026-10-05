@@ -26,6 +26,8 @@ StableRef makes working with polymorphic serialized references stable and comfor
   - [Using StableRef\<T\> in a field](#using-stablefrt-in-a-field)
   - [Using StableRefList\<T\>](#using-stablereflistt)
   - [Generic value types](#generic-value-types)
+  - [Selector without a wrapper: \[RefSelector\]](#selector-without-a-wrapper-refselector)
+  - [Keyboard navigation in the selector](#keyboard-navigation-in-the-selector)
 - [Auto-generated ID](#auto-generated-id)
 - [Editor tools](#editor-tools)
 - [Copying and pasting](#copying-and-pasting)
@@ -49,7 +51,7 @@ Unity 2021.3+
 
 ## The problem it solves
 
-Unity's built-in `[SerializeReference]` stores the full assembly-qualified type name. If you rename or move a class, Unity loses the reference and the field becomes `null`. `StableRef` decouples the serialized identity from the class name by letting you assign a permanent ID via `[StableTypeId]`.
+Unity's built-in `[SerializeReference]` stores the full assembly-qualified type name. If you rename or move a class, Unity loses the reference and the field becomes `null`. `StableRef` decouples the serialized identity from the class name by letting you assign a permanent ID via `[RefTypeId]`.
 
 ---
 
@@ -59,8 +61,9 @@ Unity's built-in `[SerializeReference]` stores the full assembly-qualified type 
 |---|---|
 | `StableRef<T>` | Serializable wrapper holding a single polymorphic reference of type `T`. |
 | `StableRefList<T>` | Serializable list of `StableRef<T>` items. |
-| `[StableTypeId("id")]` | Assigns a permanent ID to a class. Rename the class freely — Unity will still find it. |
-| `[StableRefCategory("Path")]` | Groups the type under a submenu in the inspector selector. |
+| `[RefTypeId("id")]` | Assigns a permanent ID to a class. Rename the class freely — Unity will still find it. |
+| `[RefCategory("Path")]` | Groups the type under a submenu in the inspector selector. |
+| `[RefSelector]` | Editor-only: the same selector on a plain `[SerializeReference]` field, with no wrapper and no rename protection. |
 
 ---
 
@@ -70,15 +73,15 @@ Unity's built-in `[SerializeReference]` stores the full assembly-qualified type 
 
 ```csharp
 [Serializable]
-[StableTypeId("my-package.damage-on-hit")]
-[StableRefCategory("Combat")]
+[RefTypeId("my-package.damage-on-hit")]
+[RefCategory("Combat")]
 public class DamageOnHit : IEffect
 {
     public int Amount;
 }
 ```
 
-The `[StableTypeId]` value must be unique across the project. Use a namespaced string to avoid collisions.
+The `[RefTypeId]` value must be unique across the project. Use a namespaced string to avoid collisions.
 
 ### Using StableRef\<T\> in a field
 
@@ -125,21 +128,55 @@ When you build a list from an **editor script** rather than the inspector, call 
 
 ### Generic value types
 
-The selector also supports closed generic element types. For a field like `StableRefList<ICondition<Unit>>`, open generic definitions that satisfy it (e.g. `All<TContext>`, `Any<TContext>`) are offered and closed with the field's own argument (`All<Unit>`). Each type used as a generic argument needs its own stable ID — its own file, or `[StableTypeId]` — just like any other StableRef type.
+The selector also supports closed generic element types. For a field like `StableRefList<ICondition<Unit>>`, open generic definitions that satisfy it (e.g. `All<TContext>`, `Any<TContext>`) are offered and closed with the field's own argument (`All<Unit>`). Each type used as a generic argument needs its own stable ID — its own file, or `[RefTypeId]` — just like any other StableRef type.
+
+### Selector without a wrapper: [RefSelector]
+
+When you want only the inspector selector — no wrapper type, no stored id, nothing extra in serialized data or in the build — mark a plain `[SerializeReference]` field with `[RefSelector]`:
+
+```csharp
+using SST.StableRef;
+
+public class EffectAuthoring : MonoBehaviour
+{
+    [SerializeReference, RefSelector] private IEffect _onPickup;
+    [SerializeReference, RefSelector] private List<IEffect> _effects;
+}
+```
+
+The field stays an ordinary `[SerializeReference]`: code reads `_onPickup` directly (no `.Value`), and the attribute is `[Conditional("UNITY_EDITOR")]`, so it is not even emitted into player builds. This is useful for ECS authoring/baking code, for existing `[SerializeReference]` fields you don't want to migrate, and for large lists where per-entry metadata isn't worth it. The selector offers every instantiable type, including types without a stable id; copy/paste from the context menu works as usual.
+
+> **Use at your own risk.** `[RefSelector]` fields have **no rename protection**: renaming or moving the value's class breaks the reference exactly as with a bare `[SerializeReference]`. They are deliberately **not** covered by **Find Usages** or **Fix Missing Types**. The inspector shows a broken field as `Missing (ClassName)` instead of `None`, so you don't overwrite it unnoticed. To rename a class safely, add Unity's `[MovedFrom]` (`UnityEngine.Scripting.APIUpdating`) to it. If you need refactor-proof, tracked references, use `StableRef<T>`.
+
+### Keyboard navigation in the selector
+
+The selector can be driven without the mouse; the arrows work like in Unity's Hierarchy and Project windows. It opens with the current type selected, and the search field keeps focus, so you can type to filter at any time.
+
+| Key | Action |
+|---|---|
+| `↑` / `↓`, `PageUp` / `PageDown` | Move the selection over types and categories |
+| `→` | Expand the selected collapsed category; otherwise jump down to the next category |
+| `←` | Collapse the selected expanded category; otherwise jump to the parent category (at the top level — to the previous one) |
+| `Alt` + `→` / `←` | Expand / collapse the category with everything below it |
+| `Enter` | Pick the selected type (or toggle the selected category) |
+| `Home` / `End` | First / last row |
+| `Esc` | Close without changes |
+
+While a search is typed the list is flat: `Enter` picks the highlighted match (the first one by default), and `←` / `→` / `Home` / `End` edit the search text.
 
 ---
 
 ## Auto-generated ID
 
-`[StableTypeId]` is optional. If omitted, StableRef automatically uses the **MonoScript GUID** (the `guid` value from the `.meta` file) as the stable identifier. This means:
+`[RefTypeId]` is optional. If omitted, StableRef automatically uses the **MonoScript GUID** (the `guid` value from the `.meta` file) as the stable identifier. This means:
 
 - **Class rename** — safe. The GUID is tied to the file, not the class name.
 - **Script file rename or move** — also safe. Unity's meta file travels with the asset and its GUID does not change.
 - **Deleting and recreating the file** — the reference is lost (resolves to `null`), but handled gracefully. The project continues to work; the missing type will appear in the Fix Missing Types report.
 
-For types you plan to refactor heavily, an explicit `[StableTypeId]` is more reliable since it survives even if the script file is deleted and re-created.
+For types you plan to refactor heavily, an explicit `[RefTypeId]` is more reliable since it survives even if the script file is deleted and re-created.
 
-Switching a type from an auto-generated ID to an explicit `[StableTypeId]` is safe and does **not** create missing references. The explicit ID takes priority, and existing references migrate automatically — the stored ID is rewritten from the MonoScript GUID to your custom ID the next time the field is drawn in the inspector (or when you call `StableRefSync`). Until then the old GUID still resolves (the script file is unchanged), so nothing goes missing. If you're adding the attribute specifically to prepare for a heavy refactor (deleting and recreating the file), re-save the affected assets first so the new ID is locked in.
+Switching a type from an auto-generated ID to an explicit `[RefTypeId]` is safe and does **not** create missing references. The explicit ID takes priority, and existing references migrate automatically — the stored ID is rewritten from the MonoScript GUID to your custom ID the next time the field is drawn in the inspector (or when you call `StableRefSync`). Until then the old GUID still resolves (the script file is unchanged), so nothing goes missing. If you're adding the attribute specifically to prepare for a heavy refactor (deleting and recreating the file), re-save the affected assets first so the new ID is locked in.
 
 > **Important:** don't put multiple classes in a single script file. Automatic ID generation relies on the MonoScript GUID, which is assigned to the file rather than the class — with multiple classes per file, ID generation will not work correctly.
 
@@ -163,7 +200,7 @@ All tools are available under **Tools → StableRef** in the Unity menu bar.
 
 **What recovery restores.** Each entry keeps a snapshot of its value next to the managed reference. After a rename or re-creation, recovery restores nested structs, arrays and lists, hidden serialized fields, `UnityEngine.Object` references anywhere in the value, and StableRef entries nested inside it (fixed in passes). Not captured — these come back as the new instance's defaults: `AnimationCurve`, `Gradient`, `Hash128`, `ExposedReference`, fixed buffers.
 
-Entries whose ID cannot be resolved are **skipped and kept** by Fix All (restore the type or its `[StableTypeId]` and re-run); discard one deliberately via right-click → **Clear Entry**.
+Entries whose ID cannot be resolved are **skipped and kept** by Fix All (restore the type or its `[RefTypeId]` and re-run); discard one deliberately via right-click → **Clear Entry**.
 
 ---
 

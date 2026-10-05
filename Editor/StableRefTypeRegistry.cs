@@ -40,7 +40,7 @@ namespace SST.StableRef
                 return composite;
             }
 
-            var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(StableTypeIdAttribute));
+            var attr = (RefTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(RefTypeIdAttribute));
 
             if (attr != null)
             {
@@ -67,7 +67,7 @@ namespace SST.StableRef
             }
 
             _missingTypes.Add(type);
-            Debug.LogWarning($"[StableRef] '{type.Name}' needs its own file to get a stable ID (or add [StableTypeId]).");
+            Debug.LogWarning($"[StableRef] '{type.Name}' needs its own file to get a stable ID (or add [RefTypeId]).");
             return null;
         }
 
@@ -115,9 +115,9 @@ namespace SST.StableRef
                 }
             }
 
-            foreach (var t in TypeCache.GetTypesWithAttribute<StableTypeIdAttribute>())
+            foreach (var t in TypeCache.GetTypesWithAttribute<RefTypeIdAttribute>())
             {
-                var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(t, typeof(StableTypeIdAttribute));
+                var attr = (RefTypeIdAttribute)Attribute.GetCustomAttribute(t, typeof(RefTypeIdAttribute));
                 if (attr != null && attr.Id == id) { Register(id, t); return t; }
             }
 
@@ -141,7 +141,7 @@ namespace SST.StableRef
         {
             if (type.IsGenericType && !type.IsGenericTypeDefinition) return fallback;
 
-            var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(StableTypeIdAttribute));
+            var attr = (RefTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(RefTypeIdAttribute));
             return string.IsNullOrEmpty(attr?.Id) ? fallback : attr.Id;
         }
 
@@ -149,15 +149,15 @@ namespace SST.StableRef
         private static void WarnDuplicateStableIds()
         {
             var byId = new Dictionary<string, Type>();
-            foreach (var type in TypeCache.GetTypesWithAttribute<StableTypeIdAttribute>())
+            foreach (var type in TypeCache.GetTypesWithAttribute<RefTypeIdAttribute>())
             {
-                var attr = (StableTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(StableTypeIdAttribute));
+                var attr = (RefTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(RefTypeIdAttribute));
                 if (attr == null || string.IsNullOrEmpty(attr.Id)) continue;
 
                 if (byId.TryGetValue(attr.Id, out var first))
                 {
                     Debug.LogError(
-                        $"[StableRef] Duplicate [StableTypeId(\"{attr.Id}\")] on '{first.FullName}' and '{type.FullName}'. IDs must be unique.");
+                        $"[StableRef] Duplicate [RefTypeId(\"{attr.Id}\")] on '{first.FullName}' and '{type.FullName}'. IDs must be unique.");
                 }
                 else
                 {

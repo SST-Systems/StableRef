@@ -46,12 +46,14 @@ namespace SST.StableRef
         private Type _currentType;
         private StableRefPropertyUtils.TypeEntry[] _entries;
         private string _search = "";
-        private int _hoveredIndex = -1;
+        private int _selectedIndex = -1;
         private Vector2 _scroll;
         private bool _doFocusSearch = true;
         private int _focusFrames;
         private float _contentH;
         private float _contentW;
+        private float _viewH;
+        private bool _scrollToSelection;
         private Rect _anchorScreen;
 
         private readonly HashSet<string> _collapsed = new();
@@ -103,7 +105,7 @@ namespace SST.StableRef
             _selectionRect = GUI.skin.FindStyle("SelectionRect") ?? GUI.skin.box;
             _prDisabledLabel = GUI.skin.FindStyle("PR DisabledLabel") ?? EditorStyles.centeredGreyMiniLabel;
             _greyBorder = GUI.skin.FindStyle("grey_border") ?? GUIStyle.none;
-            _gearContent = StableRefEditorUtility.Icon("d_Settings", "=");
+            _gearContent = StableRefEditorUtility.Icon("Settings", "=");
 
             _borderColor = new Color(0.10f, 0.10f, 0.10f, 1.00f);
             _separatorColor = new Color(0.00f, 0.00f, 0.00f, 0.30f);
@@ -118,16 +120,24 @@ namespace SST.StableRef
             var win = CreateInstance<StableRefSelectorWindow>();
             win._targets = property.serializedObject.targetObjects;
             win._valuePath = property.propertyPath;
-            win._currentType = property.managedReferenceValue?.GetType();
-            win._entries = entries;
-            win.RebuildRows();
+            bool mixed = StableRefMultiEdit.IsMixed(property);
+            win._currentType = mixed ? null : property.managedReferenceValue?.GetType();
+            win.Open(btnRect, entries);
+            if (mixed) win._selectedIndex = -1;
+        }
+
+        private void Open(Rect btnRect, StableRefPropertyUtils.TypeEntry[] entries)
+        {
+            _entries = entries;
+            RebuildRows();
+            SelectCurrentOrNone();
 
             float w = SavedW;
             float h = SavedH;
             var screen = GUIUtility.GUIToScreenPoint(new Vector2(btnRect.x, btnRect.yMax));
-            win._anchorScreen = new Rect(screen.x, screen.y, w, 0f);
-            win.wantsMouseMove = true;
-            win.ShowAsDropDown(win._anchorScreen, new Vector2(w, h));
+            _anchorScreen = new Rect(screen.x, screen.y, w, 0f);
+            wantsMouseMove = true;
+            ShowAsDropDown(_anchorScreen, new Vector2(w, h));
         }
 
         private void OnGUI()
@@ -136,6 +146,9 @@ namespace SST.StableRef
 
             if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
             { Close(); Event.current.Use(); return; }
+
+            HandleKeyboard();
+            if (this == null) return;
 
             EnsureStyles();
             DrawToolbar();
@@ -177,19 +190,20 @@ namespace SST.StableRef
             if (EditorGUI.EndChangeCheck())
             {
                 _search = next;
-                _hoveredIndex = -1;
                 _scroll = Vector2.zero;
                 RebuildRows();
+                SelectFirstMatch();
                 Repaint();
             }
 
             bool empty = string.IsNullOrEmpty(_search);
             if (GUI.Button(cancel, GUIContent.none, empty ? _toolbarSearchCancelEmpty : _toolbarSearchCancel) && !empty)
             {
+                var prev = SelectedRow;
                 _search = "";
-                _hoveredIndex = -1;
                 _scroll = Vector2.zero;
                 RebuildRows();
+                if (!RestoreSelection(prev)) SelectCurrentOrNone();
                 GUI.FocusControl("StableRefSearch");
                 Repaint();
             }
@@ -223,6 +237,13 @@ namespace SST.StableRef
             float contentW = Mathf.Max(_contentW, availW);
             float contentH = Mathf.Max(_contentH, availH);
 
+            _viewH = availH;
+            if (_scrollToSelection && Event.current.type == EventType.Layout)
+            {
+                _scrollToSelection = false;
+                EnsureVisible(_selectedIndex);
+            }
+
             EditorGUI.DrawRect(new Rect(0, listY - 1, position.width, 1), _separatorColor);
 
             _scroll = GUI.BeginScrollView(
@@ -247,59 +268,47 @@ namespace SST.StableRef
             GUI.EndScrollView();
 
             if (clicked >= 0) SelectRow(_rows[clicked]);
-            HandleKeyboard();
         }
 
         private void DrawRow(ref RowItem row, int index, Rect r, Vector2 mp, Type currentType, ref int clicked)
         {
+            bool inR = r.Contains(mp);
+            if (inR && (Event.current.type == EventType.MouseMove || Event.current.type == EventType.MouseDown))
+                _selectedIndex = index;
+            bool selected = index == _selectedIndex;
+
             if (row.IsHeader)
             {
+                if (Event.current.type == EventType.Repaint && selected)
+                    _selectionRect.Draw(r, false, false, true, true);
                 EditorGUI.DrawRect(new Rect(r.x, r.y, r.width, 1f), _headerLineColor);
 
                 float ix = r.x + 6f + row.Depth * Indent;
                 bool collapsed = _collapsed.Contains(row.CategoryPath);
-                EditorGUI.LabelField(new Rect(ix, r.y + 1f, 14f, r.height - 1f), collapsed ? "►" : "▼", _prDisabledLabel);
-                EditorGUI.LabelField(new Rect(ix + 14f, r.y + 1f, r.width - ix - 14f, r.height - 1f), row.Label, _prDisabledLabel);
+                var style = selected ? EditorStyles.whiteLabel : _prDisabledLabel;
+                EditorGUI.LabelField(new Rect(ix, r.y + 1f, 14f, r.height - 1f), collapsed ? "►" : "▼", style);
+                EditorGUI.LabelField(new Rect(ix + 14f, r.y + 1f, r.width - ix - 14f, r.height - 1f), row.Label, style);
 
-                if (r.Contains(mp) && Event.current.type == EventType.MouseDown)
+                if (inR && Event.current.type == EventType.MouseDown)
                 {
-                    bool recursive = Event.current.alt;
-
-                    if (collapsed)
-                    {
-                        _collapsed.Remove(row.CategoryPath);
-                        if (recursive) ExpandRecursive(row.CategoryPath);
-                    }
-                    else
-                    {
-                        _collapsed.Add(row.CategoryPath);
-                        if (recursive) CollapseRecursive(row.CategoryPath);
-                    }
-
-                    RebuildRows();
+                    SetCollapsed(index, !collapsed, Event.current.alt);
                     Event.current.Use();
                     Repaint();
                 }
                 return;
             }
 
-            bool inR = r.Contains(mp);
             bool current = !row.IsNone && currentType != null && currentType == row.Entry?.Type;
-
-            if (inR && (Event.current.type == EventType.MouseMove || Event.current.type == EventType.MouseDown))
-                _hoveredIndex = index;
-
-            bool hovered = index == _hoveredIndex;
 
             if (Event.current.type == EventType.Repaint)
             {
-                if (hovered) _selectionRect.Draw(r, false, false, true, true);
+                if (selected) _selectionRect.Draw(r, false, false, true, true);
                 else if (current) EditorGUI.DrawRect(r, _currentColor);
             }
 
             EditorGUI.LabelField(
                 new Rect(r.x + TextX + row.Depth * Indent, r.y, r.width - TextX - row.Depth * Indent - 2f, r.height),
-                row.Label, (hovered || current) ? EditorStyles.whiteLabel : EditorStyles.label);
+                row.Label, (selected || current) ? EditorStyles.whiteLabel : EditorStyles.label);
 
             if (inR && Event.current.type == EventType.MouseDown)
             { clicked = index; Event.current.Use(); }
@@ -328,6 +337,7 @@ namespace SST.StableRef
             var entries = _entries;
             var search = _search;
             var collapsed = new HashSet<string>(_collapsed);
+            var selected = SelectedRow;
 
             EditorApplication.delayCall += () =>
             {
@@ -342,70 +352,193 @@ namespace SST.StableRef
                 win._collapsed.UnionWith(collapsed);
                 win.wantsMouseMove = true;
                 win.RebuildRows();
+                if (!win.RestoreSelection(selected)) win.SelectCurrentOrNone();
                 win.ShowAsDropDown(anchor, new Vector2(w, h));
             };
         }
 
+        /// <summary>
+        /// Keyboard navigation, handled before the search field is drawn so the field cannot swallow the keys.
+        /// Mirrors Unity's tree views (Hierarchy / Project, <c>TreeViewController</c>): Up / Down / PageUp /
+        /// PageDown / Home / End move over types and category headers; Right expands a collapsed category,
+        /// otherwise jumps down to the next category; Left collapses an expanded category, otherwise jumps to the
+        /// parent (or, at the top level, to the previous category); Alt makes expand / collapse recursive. Enter
+        /// picks the selected type or toggles the selected category. While searching the list is flat, so
+        /// Left / Right / Home / End stay with the search field.
+        /// </summary>
         private void HandleKeyboard()
         {
-            if (Event.current.type != EventType.KeyDown) return;
+            var ev = Event.current;
+            if (ev.type != EventType.KeyDown || _rows.Count == 0) return;
 
-            int count = _rows.Count;
-            int cur = -1;
-            int selCount = 0;
+            bool searching = !string.IsNullOrWhiteSpace(_search);
+            int page = Mathf.Max(1, Mathf.FloorToInt(_viewH / RowH) - 1);
 
-            for (int i = 0; i < count; i++)
+            switch (ev.keyCode)
             {
-                if (_rows[i].IsHeader) continue;
-                if (i == _hoveredIndex) cur = selCount;
-                selCount++;
-            }
-
-            if (selCount == 0) return;
-
-            int nextSel;
-            switch (Event.current.keyCode)
-            {
-                case KeyCode.DownArrow: nextSel = Mathf.Clamp(cur + 1, 0, selCount - 1); break;
-                case KeyCode.UpArrow: nextSel = cur < 0 ? selCount - 1 : Mathf.Clamp(cur - 1, 0, selCount - 1); break;
+                case KeyCode.DownArrow: MoveSelection(1); break;
+                case KeyCode.UpArrow: MoveSelection(-1); break;
+                case KeyCode.PageDown: MoveSelection(page); break;
+                case KeyCode.PageUp: MoveSelection(-page); break;
+                case KeyCode.Home when !searching: SetSelection(0); break;
+                case KeyCode.End when !searching: SetSelection(_rows.Count - 1); break;
+                case KeyCode.RightArrow when !searching: ExpandOrNextCategory(ev.alt); break;
+                case KeyCode.LeftArrow when !searching: CollapseOrParent(ev.alt); break;
                 case KeyCode.Return:
                 case KeyCode.KeypadEnter:
-                    if (_hoveredIndex >= 0 && _hoveredIndex < count)
-                    {
-                        SelectRow(_rows[_hoveredIndex]);
-                    }
-                    else if (!string.IsNullOrWhiteSpace(_search))
-                    {
-                        for (int i = 0; i < count; i++)
-                        {
-                            if (_rows[i].IsHeader || _rows[i].IsNone) continue;
-                            SelectRow(_rows[i]);
-                            break;
-                        }
-                    }
-                    Event.current.Use();
+                    ev.Use();
+                    Submit(ev.alt);
                     return;
                 default: return;
             }
 
-            int found = 0;
-            for (int i = 0; i < count; i++)
+            ev.Use();
+            Repaint();
+        }
+
+        private void MoveSelection(int delta)
+        {
+            if (!IsValidSelection)
+                SetSelection(delta > 0 ? 0 : _rows.Count - 1);
+            else
+                SetSelection(_selectedIndex + delta);
+        }
+
+        private void SetSelection(int index)
+        {
+            _selectedIndex = Mathf.Clamp(index, 0, _rows.Count - 1);
+            EnsureVisible(_selectedIndex);
+        }
+
+        private void ExpandOrNextCategory(bool recursive)
+        {
+            if (!IsValidSelection) return;
+
+            var row = _rows[_selectedIndex];
+            if (row.IsHeader && _collapsed.Contains(row.CategoryPath))
             {
-                if (_rows[i].IsHeader) continue;
-                if (found == nextSel) { _hoveredIndex = i; break; }
-                found++;
+                SetCollapsed(_selectedIndex, false, recursive);
+                return;
             }
 
-            EnsureVisible(_hoveredIndex);
-            Event.current.Use();
-            Repaint();
+            for (int i = _selectedIndex + 1; i < _rows.Count; i++)
+                if (_rows[i].IsHeader) { SetSelection(i); return; }
+        }
+
+        private void CollapseOrParent(bool recursive)
+        {
+            if (!IsValidSelection) return;
+
+            var row = _rows[_selectedIndex];
+            if (row.IsHeader && !_collapsed.Contains(row.CategoryPath))
+            {
+                SetCollapsed(_selectedIndex, true, recursive);
+                return;
+            }
+
+            for (int i = _selectedIndex - 1; i >= 0; i--)
+            {
+                bool target = row.Depth > 0 ? _rows[i].Depth < row.Depth : _rows[i].IsHeader;
+                if (target) { SetSelection(i); return; }
+            }
+        }
+
+        private void Submit(bool recursive)
+        {
+            if (IsValidSelection)
+            {
+                var row = _rows[_selectedIndex];
+                if (row.IsHeader)
+                {
+                    SetCollapsed(_selectedIndex, !_collapsed.Contains(row.CategoryPath), recursive);
+                    Repaint();
+                }
+                else
+                {
+                    SelectRow(row);
+                }
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(_search)) return;
+            foreach (var row in _rows)
+            {
+                if (row.IsHeader || row.IsNone) continue;
+                SelectRow(row);
+                return;
+            }
+        }
+
+        /// <summary>
+        /// Collapses or expands the category header at <paramref name="headerIndex"/> (and, with
+        /// <paramref name="recursive"/>, every category below it), then keeps that header selected.
+        /// </summary>
+        private void SetCollapsed(int headerIndex, bool collapse, bool recursive)
+        {
+            string path = _rows[headerIndex].CategoryPath;
+
+            if (collapse)
+            {
+                _collapsed.Add(path);
+                if (recursive) CollapseRecursive(path);
+            }
+            else
+            {
+                _collapsed.Remove(path);
+                if (recursive) ExpandRecursive(path);
+            }
+
+            RebuildRows();
+            for (int i = 0; i < _rows.Count; i++)
+                if (_rows[i].IsHeader && _rows[i].CategoryPath == path) { SetSelection(i); return; }
+            _selectedIndex = -1;
+        }
+
+        private void SelectCurrentOrNone()
+        {
+            _selectedIndex = 0;
+            if (_currentType != null)
+                for (int i = 0; i < _rows.Count; i++)
+                    if (!_rows[i].IsHeader && !_rows[i].IsNone && _rows[i].Entry?.Type == _currentType)
+                    { _selectedIndex = i; break; }
+            _scrollToSelection = true;
+        }
+
+        private void SelectFirstMatch()
+        {
+            _selectedIndex = 0;
+            if (string.IsNullOrWhiteSpace(_search)) return;
+            for (int i = 0; i < _rows.Count; i++)
+                if (!_rows[i].IsHeader && !_rows[i].IsNone) { _selectedIndex = i; break; }
+        }
+
+        private bool IsValidSelection => _selectedIndex >= 0 && _selectedIndex < _rows.Count;
+
+        private RowItem? SelectedRow => IsValidSelection ? _rows[_selectedIndex] : (RowItem?)null;
+
+        private bool RestoreSelection(RowItem? previous)
+        {
+            if (previous == null) return false;
+            var p = previous.Value;
+            for (int i = 0; i < _rows.Count; i++)
+            {
+                var r = _rows[i];
+                bool same = r.IsHeader == p.IsHeader && r.IsNone == p.IsNone
+                    && (r.IsHeader ? r.CategoryPath == p.CategoryPath : ReferenceEquals(r.Entry, p.Entry));
+                if (!same) continue;
+                _selectedIndex = i;
+                _scrollToSelection = true;
+                return true;
+            }
+            return false;
         }
 
         private void EnsureVisible(int index)
         {
+            if (index < 0) return;
             float y = index * RowH;
-            float listH = position.height - ToolbarH - 1f;
-            _scroll.y = Mathf.Clamp(_scroll.y, y - listH + RowH, y);
+            float viewH = _viewH > 0f ? _viewH : position.height - ToolbarH - 1f;
+            _scroll.y = Mathf.Clamp(_scroll.y, y - viewH + RowH, y);
         }
 
         private void SelectRow(RowItem row)
@@ -424,7 +557,10 @@ namespace SST.StableRef
                 var prop = so.FindProperty(path);
                 if (prop == null) continue;
 
-                var wrapper = WrapperOf(so, path);
+                var current = prop.managedReferenceValue;
+                if (row.IsNone ? current == null : current?.GetType() == row.Entry.Type) continue;
+
+                var wrapper = StableRefEntry.FindWrapperOfValue(so, path);
 
                 if (row.IsNone)
                 {
@@ -443,17 +579,8 @@ namespace SST.StableRef
                 so.ApplyModifiedProperties();
             }
 
+            StableRefMultiEdit.Invalidate();
             Close();
-        }
-
-        private static SerializedProperty WrapperOf(SerializedObject so, string valuePath)
-        {
-            const string valueSuffix = ".Value";
-            if (!valuePath.EndsWith(valueSuffix, StringComparison.Ordinal)) return null;
-
-            var wrapper = so.FindProperty(valuePath.Substring(0, valuePath.Length - valueSuffix.Length));
-            if (wrapper == null || wrapper.FindPropertyRelative("TypeId") == null) return null;
-            return wrapper;
         }
 
         private static object CreateInstanceSafe(Type type)

@@ -30,7 +30,7 @@ namespace SST.StableRef
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
-            var itemsProp = property.FindPropertyRelative("_items");
+            var itemsProp = property.FindPropertyRelative(StableRefEntry.ListItemsFieldName);
             if (itemsProp == null)
             {
                 EditorGUI.PropertyField(position, property, label, true);
@@ -105,7 +105,7 @@ namespace SST.StableRef
 
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
         {
-            var itemsProp = property.FindPropertyRelative("_items");
+            var itemsProp = property.FindPropertyRelative(StableRefEntry.ListItemsFieldName);
             if (itemsProp == null)
                 return EditorGUI.GetPropertyHeight(property, label, true);
 
@@ -192,9 +192,9 @@ namespace SST.StableRef
             for (int i = 0; i < itemsProp.arraySize; i++)
             {
                 var elem = itemsProp.GetArrayElementAtIndex(i);
-                var typeIdProp = elem.FindPropertyRelative("TypeId");
+                var typeIdProp = elem.FindPropertyRelative(StableRefEntry.TypeIdFieldName);
                 if (typeIdProp == null || string.IsNullOrEmpty(typeIdProp.stringValue)) continue;
-                if (elem.FindPropertyRelative("Value")?.managedReferenceValue == null)
+                if (elem.FindPropertyRelative(StableRefEntry.ValueFieldName)?.managedReferenceValue == null)
                 {
                     broken = true;
                     break;
