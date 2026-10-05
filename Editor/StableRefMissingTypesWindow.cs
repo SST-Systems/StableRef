@@ -814,7 +814,7 @@ namespace SST.StableRef
                 Debug.LogWarning(
                     $"[StableRef] Skipped {unresolvedCount} entr{(unresolvedCount != 1 ? "ies" : "y")} whose stable id " +
                     "no longer resolves to a type. Their recovery data was preserved — restore the type (or its " +
-                    "[RefTypeId]) and re-run Fix All, or right-click the field and choose Clear Entry to discard.");
+                    "[RefTypeId]) and re-run Fix All, or pick None / another type in the field's selector (or delete the element) to discard.");
             }
 
             if (skippedScenes > 0)
@@ -886,29 +886,11 @@ namespace SST.StableRef
 
             if (totalFixed > 0)
             {
-                ClearReplacedMissingReferences(target, replacedIds);
+                StableRefEntry.ReleaseMissingData(target, replacedIds);
                 EditorUtility.SetDirty(target);
             }
 
             return totalFixed;
-        }
-
-        /// <summary>
-        /// Drops the native missing-type data only for the references StableRef has just recreated. Other
-        /// missing-type data on the object — e.g. a plain <c>[SerializeReference]</c> / <c>[RefSelector]</c>
-        /// field whose class was renamed — is not ours to discard and stays in the file.
-        /// </summary>
-        private static void ClearReplacedMissingReferences(UnityEngine.Object target, List<long> replacedIds)
-        {
-            if (replacedIds.Count == 0 || !SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
-
-            var missingIds = new HashSet<long>();
-            foreach (var missing in SerializationUtility.GetManagedReferencesWithMissingTypes(target))
-                missingIds.Add(missing.referenceId);
-
-            foreach (long id in replacedIds)
-                if (missingIds.Contains(id))
-                    SerializationUtility.ClearManagedReferenceWithMissingType(target, id);
         }
 
         private static List<string> CollectMissingWrapperPaths(SerializedObject so, string pathPrefix)

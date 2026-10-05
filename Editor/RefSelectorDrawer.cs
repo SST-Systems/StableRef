@@ -47,6 +47,7 @@ namespace SST.StableRef
             }
 
             StableRefSelectorField.Draw(position, property, label, options);
+            StableRefContextMenu.HandleElementContextClick(position, property);
             EditorGUI.EndProperty();
         }
 

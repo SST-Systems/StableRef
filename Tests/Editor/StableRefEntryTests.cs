@@ -215,6 +215,24 @@ namespace SST.StableRef.Tests
         }
 
         [Test]
+        public void TryGetParentArray_OnlyMatchesTheElementItself()
+        {
+            var holder = NewHolder();
+            holder.List.Add(new AlphaThing { Inner = new StableRef<ITestThing> { Value = new BetaThing() } });
+            var so = new SerializedObject(holder);
+
+            var elementValue = so.FindProperty("List._items.Array.data[0].Value");
+            Assert.IsTrue(StableRefPropertyUtils.TryGetParentArray(elementValue, out var array, out int index));
+            Assert.AreEqual("List._items", array.propertyPath);
+            Assert.AreEqual(0, index);
+
+            var nestedValue = so.FindProperty("List._items.Array.data[0].Value.Inner.Value");
+            Assert.IsNotNull(nestedValue);
+            Assert.IsFalse(StableRefPropertyUtils.TryGetParentArray(nestedValue, out _, out _),
+                "a StableRef nested inside an element's value is not an element of the outer list");
+        }
+
+        [Test]
         public void GetEntries_RefSelector_OffersTypesWithoutStableId()
         {
             var holder = NewHolder();

@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
@@ -61,19 +62,63 @@ namespace SST.StableRef
         }
 
         /// <summary>
-        /// Drops Unity's native missing-type record <paramref name="refId"/> of <paramref name="target"/> once
-        /// nothing references it any more — the explicit-discard counterpart of keeping it for recovery.
+        /// Releases Unity's native missing-type data of <paramref name="target"/> after an explicit discard or a
+        /// fix: drops the records in <paramref name="discardedIds"/>, then everything else once nothing on the
+        /// object still depends on it — no StableRef entry is still missing and no plain <c>[SerializeReference]</c>
+        /// field still points at missing data. Clears the inspector's "contains SerializeReference types which are
+        /// missing" warning without waiting for a domain reload.
         /// </summary>
-        internal static void ClearNativeMissingData(UnityEngine.Object target, long refId)
+        /// <remarks>
+        /// The full clear is what makes the warning go away reliably: a discarded value can leave records whose id
+        /// can't be matched from the property side. It never runs while any entry or field still needs the data.
+        /// </remarks>
+        internal static void ReleaseMissingData(UnityEngine.Object target, IEnumerable<long> discardedIds = null)
         {
-            if (refId == StableRefEditorUtility.ManagedRefIdNull) return;
-            if (!SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
-            foreach (var missing in SerializationUtility.GetManagedReferencesWithMissingTypes(target))
+            if (target == null || !SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
+
+            if (discardedIds != null)
             {
-                if (missing.referenceId != refId) continue;
-                SerializationUtility.ClearManagedReferenceWithMissingType(target, refId);
-                return;
+                var missingIds = new HashSet<long>();
+                foreach (var missing in SerializationUtility.GetManagedReferencesWithMissingTypes(target))
+                    missingIds.Add(missing.referenceId);
+                foreach (long id in discardedIds)
+                    if (missingIds.Contains(id))
+                        SerializationUtility.ClearManagedReferenceWithMissingType(target, id);
             }
+
+            if (SerializationUtility.HasManagedReferencesWithMissingTypes(target) && !StillNeedsMissingData(target))
+                SerializationUtility.ClearAllManagedReferencesWithMissingTypes(target);
+        }
+
+        private static bool StillNeedsMissingData(UnityEngine.Object target)
+        {
+            var so = new SerializedObject(target);
+            var iter = so.GetIterator();
+            bool enter = true;
+
+            while (iter.Next(enter))
+            {
+                if (iter.propertyType != SerializedPropertyType.ManagedReference)
+                {
+                    enter = iter.propertyType == SerializedPropertyType.Generic;
+                    continue;
+                }
+
+                if (iter.managedReferenceValue != null)
+                {
+                    enter = true;
+                    continue;
+                }
+
+                var wrapper = FindWrapperOfValue(so, iter.propertyPath);
+                bool needed = wrapper != null
+                    ? IsMissing(wrapper)
+                    : iter.managedReferenceId != StableRefEditorUtility.ManagedRefIdNull;
+                if (needed) return true;
+                enter = false;
+            }
+
+            return false;
         }
 
         /// <summary>Content color the built-in drawer uses for a missing entry's label.</summary>

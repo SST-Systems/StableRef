@@ -549,7 +549,7 @@ namespace SST.StableRef
             var targets = _targets;
             bool expand = !row.IsNone;
 
-            if (!ConfirmDiscardMissing(targets, path, row))
+            if (!StableRefContextMenu.ConfirmDiscardMissing(targets, path, row.IsNone ? "None" : row.Entry.Name))
             {
                 if (this != null) Close();
                 return;
@@ -586,36 +586,11 @@ namespace SST.StableRef
 
                 prop.isExpanded = expand;
                 so.ApplyModifiedProperties();
-                if (missing) StableRefEntry.ClearNativeMissingData(target, oldId);
+                if (missing) StableRefEntry.ReleaseMissingData(target, new[] { oldId });
             }
 
             StableRefMultiEdit.Invalidate();
             if (this != null) Close();
-        }
-
-        /// <summary>
-        /// Picking a type (or None) for an entry whose type is missing discards its recovery data — the class may
-        /// only be missing for a moment (compile error, branch switch), so it is confirmed first.
-        /// </summary>
-        private static bool ConfirmDiscardMissing(UnityEngine.Object[] targets, string path, RowItem row)
-        {
-            int count = 0;
-            foreach (var target in targets)
-            {
-                if (target == null) continue;
-                var so = new SerializedObject(target);
-                var prop = so.FindProperty(path);
-                if (prop != null && StableRefEntry.HoldsMissingData(so, prop)) count++;
-            }
-            if (count == 0) return true;
-
-            string replacement = row.IsNone ? "None" : row.Entry.Name;
-            return EditorUtility.DisplayDialog("Replace missing reference",
-                $"The type of this reference can't be found{(count > 1 ? $" on {count} objects" : "")}. " +
-                $"Setting it to {replacement} discards the data kept for recovering it.\n\n" +
-                "If the class is only missing for a moment (compile errors, switching branches), cancel, " +
-                "fix that and the reference comes back by itself (or via Fix Missing Types).",
-                $"Replace with {replacement}", "Cancel");
         }
 
         private static object CreateInstanceSafe(Type type)

@@ -50,6 +50,7 @@ namespace SST.StableRef
                 StableRefSelectorField.Draw(position, valueProp, label, options);
             }
 
+            StableRefContextMenu.HandleElementContextClick(position, valueProp);
             EditorGUI.EndProperty();
         }
 
@@ -121,8 +122,8 @@ namespace SST.StableRef
                 if (unresolvedTotal > 0)
                     Debug.LogWarning(
                         "[StableRef] The entry's stable id no longer resolves to a type. It was kept " +
-                        "untouched — restore the type (or its [RefTypeId]), or right-click the field " +
-                        "and choose Clear Entry to discard it.");
+                        "untouched — restore the type (or its [RefTypeId]), or pick None / another type in " +
+                        "its selector (or delete the element) to discard it.");
             };
         }
 

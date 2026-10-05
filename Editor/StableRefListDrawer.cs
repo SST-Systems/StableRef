@@ -11,11 +11,12 @@ namespace SST.StableRef
     {
         private static readonly Dictionary<(long, string), ReorderableList> _cache = new();
         private static readonly Dictionary<(long, string), bool> _brokenMemo = new();
+        private static readonly Dictionary<ReorderableList, Dictionary<int, Rect>> _rowRects = new();
 
         [InitializeOnLoadMethod]
         private static void HookCacheEviction()
         {
-            Selection.selectionChanged += () => { _cache.Clear(); _brokenMemo.Clear(); };
+            Selection.selectionChanged += () => { _cache.Clear(); _brokenMemo.Clear(); _rowRects.Clear(); };
             EditorApplication.update += _brokenMemo.Clear;
         }
 
@@ -26,7 +27,11 @@ namespace SST.StableRef
         /// reused list keeps reporting a stale height after an expand/collapse. Call this whenever a
         /// StableRef / StableRefList foldout is toggled so the affected lists re-measure.
         /// </summary>
-        internal static void InvalidateCache() => _cache.Clear();
+        internal static void InvalidateCache()
+        {
+            _cache.Clear();
+            _rowRects.Clear();
+        }
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
@@ -96,6 +101,7 @@ namespace SST.StableRef
                 int savedIndent = EditorGUI.indentLevel;
                 EditorGUI.indentLevel = 0;
                 list.DoList(new Rect(position.x, y, position.width, list.GetHeight()));
+                HandleRowContextClick(list);
                 EditorGUI.indentLevel = savedIndent;
             }
 
@@ -147,6 +153,7 @@ namespace SST.StableRef
             rl.drawElementCallback = (rect, index, _, _) =>
             {
                 if (index >= rl.serializedProperty.arraySize) return;
+                RowRects(rl)[index] = rect;
                 const float LeftPad = 12f;
                 var elem = rl.serializedProperty.GetArrayElementAtIndex(index);
                 EditorGUI.PropertyField(
@@ -177,10 +184,49 @@ namespace SST.StableRef
                 list.index = arrayProp.arraySize - 1;
             };
 
+            rl.onRemoveCallback = list =>
+            {
+                var so = list.serializedProperty.serializedObject;
+                ReorderableList.defaultBehaviours.DoRemoveButton(list);
+                so.ApplyModifiedProperties();
+                foreach (var target in so.targetObjects)
+                    StableRefEntry.ReleaseMissingData(target);
+                StableRefMultiEdit.Invalidate();
+            };
+
             return rl;
         }
 
         private static void ResetElement(SerializedProperty elem) => StableRefEntry.Clear(elem);
+
+        private static Dictionary<int, Rect> RowRects(ReorderableList list)
+        {
+            if (!_rowRects.TryGetValue(list, out var rects)) _rowRects[list] = rects = new Dictionary<int, Rect>();
+            return rects;
+        }
+
+        /// <summary>
+        /// A context click on an element row that no control inside it consumed — the drag handle, the row
+        /// padding — opens that element's menu instead of falling through to the whole list's menu.
+        /// </summary>
+        private static void HandleRowContextClick(ReorderableList list)
+        {
+            var ev = Event.current;
+            if (ev.type != EventType.ContextClick || !_rowRects.TryGetValue(list, out var rects)) return;
+
+            foreach (var pair in rects)
+            {
+                var rect = pair.Value;
+                if (ev.mousePosition.y < rect.yMin || ev.mousePosition.y >= rect.yMax) continue;
+                if (pair.Key >= list.serializedProperty.arraySize) return;
+
+                var elem = list.serializedProperty.GetArrayElementAtIndex(pair.Key);
+                var valueProp = elem.FindPropertyRelative(StableRefEntry.ValueFieldName);
+                var rowRect = new Rect(ev.mousePosition.x - 1f, rect.y, 2f, rect.height);
+                StableRefContextMenu.HandleElementContextClick(rowRect, valueProp);
+                return;
+            }
+        }
 
         private static bool HasBrokenRefs(SerializedProperty itemsProp)
         {

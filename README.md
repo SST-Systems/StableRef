@@ -200,7 +200,7 @@ All tools are available under **Tools → StableRef** in the Unity menu bar.
 
 **What recovery restores.** Each entry keeps a snapshot of its value next to the managed reference. After a rename or re-creation, recovery restores nested structs, arrays and lists, hidden serialized fields, `UnityEngine.Object` references anywhere in the value, and StableRef entries nested inside it (fixed in passes). Not captured — these come back as the new instance's defaults: `AnimationCurve`, `Gradient`, `Hash128`, `ExposedReference`, fixed buffers.
 
-Entries whose ID cannot be resolved are **skipped and kept** by Fix All (restore the type or its `[RefTypeId]` and re-run); discard one deliberately via right-click → **Clear Entry**, or replace it by picking another type (or None) in its selector — a missing entry never locks its field or its `StableRefList`, and replacing it asks for confirmation first, since a class can also be missing just for a moment (compile errors, switching branches).
+Entries whose ID cannot be resolved are **skipped and kept** by Fix All (restore the type or its `[RefTypeId]` and re-run); discard one deliberately by picking None (or another type) in its selector, **Set to None** in its right-click menu, or deleting the list element. A missing entry never locks its field or its `StableRefList`; replacing it asks for confirmation first, since a class can also be missing just for a moment (compile errors, switching branches).
 
 ---
 
@@ -214,13 +214,15 @@ Could not update a managed instance value at property path 'managedReferences[..
 
 This error can persist across editor restarts and does **not** go away by reverting the component, because the corruption is already baked into the serialized file.
 
-To move `StableRef<T>` / `StableRefList<T>` values around safely, use the built-in right-click menu instead of Unity's native component copy/paste:
+To move `StableRef<T>` / `StableRefList<T>` values around safely, use the built-in right-click menu instead of Unity's native component copy/paste. Right-clicking a list element (anywhere on its row) opens the menu of **that element**; right-clicking the list header opens the menu of the whole list. The same element commands work in `List<StableRef<T>>`, `StableRef<T>[]` and `[RefSelector]` lists:
 
 | Menu item | Where to right-click | What it does |
 |---|---|---|
 | `StableRef/Copy` | A single `StableRef<T>` field | Copies the current value to an internal clipboard. |
 | `StableRef/Paste` | A single `StableRef<T>` field of a compatible type | Creates a fresh managed reference in the target field. |
-| `StableRef/Duplicate` | A `StableRef<T>` element inside a list | Inserts a copy right after that element. |
+| `Paste as New Element` | Any part of a list element (type button, drag handle, row padding) | Inserts the copied value as a new element right after it. |
+| `Duplicate Array Element` | Any part of a list element | Inserts a deep copy right after that element (Unity's own Duplicate would share the same managed reference between both elements). |
+| `Delete Array Element` | Any part of a list element | Removes that element. |
 | `StableRef/Copy` | The `StableRefList<T>` header (or an array of `StableRef<T>`) | Copies all entries in the list. |
 | `StableRef/Paste/Replace` or `StableRef/Paste/Append` | The `StableRefList<T>` header (or an array of `StableRef<T>`) | Replaces or appends the copied entries. |
 
