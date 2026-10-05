@@ -214,15 +214,15 @@ Could not update a managed instance value at property path 'managedReferences[..
 
 This error can persist across editor restarts and does **not** go away by reverting the component, because the corruption is already baked into the serialized file.
 
-To move `StableRef<T>` / `StableRefList<T>` values around safely, use the built-in right-click menu instead of Unity's native component copy/paste. Right-clicking a list element (anywhere on its row) opens the menu of **that element**; right-clicking the list header opens the menu of the whole list. The same element commands work in `List<StableRef<T>>`, `StableRef<T>[]` and `[RefSelector]` lists:
+To move `StableRef<T>` / `StableRefList<T>` values around safely, use the built-in right-click menu instead of Unity's native component copy/paste. Right-clicking a list element opens the menu of **that element** (in a `StableRefList<T>` anywhere on its row); right-clicking the list header opens the menu of the whole list. The same element commands work in `List<StableRef<T>>`, `StableRef<T>[]` and `[RefSelector]` lists — there Unity draws the rows itself, so right-click the element's field:
 
 | Menu item | Where to right-click | What it does |
 |---|---|---|
 | `StableRef/Copy` | A single `StableRef<T>` field | Copies the current value to an internal clipboard. |
 | `StableRef/Paste` | A single `StableRef<T>` field of a compatible type | Creates a fresh managed reference in the target field. |
-| `Paste as New Element` | Any part of a list element (type button, drag handle, row padding) | Inserts the copied value as a new element right after it. |
-| `Duplicate Array Element` | Any part of a list element | Inserts a deep copy right after that element (Unity's own Duplicate would share the same managed reference between both elements). |
-| `Delete Array Element` | Any part of a list element | Removes that element. |
+| `Paste as New Element` | A list element (in `StableRefList<T>`: any part of its row — type button, drag handle, row padding) | Inserts the copied value as a new element right after it. |
+| `Duplicate Array Element` | A list element | Inserts a deep copy right after that element (Unity's own Duplicate would share the same managed reference between both elements). |
+| `Delete Array Element` | A list element | Removes that element. |
 | `StableRef/Copy` | The `StableRefList<T>` header (or an array of `StableRef<T>`) | Copies all entries in the list. |
 | `StableRef/Paste/Replace` or `StableRef/Paste/Append` | The `StableRefList<T>` header (or an array of `StableRef<T>`) | Replaces or appends the copied entries. |
 

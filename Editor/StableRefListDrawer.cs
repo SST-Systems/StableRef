@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace SST.StableRef
 {
@@ -187,14 +188,48 @@ namespace SST.StableRef
             rl.onRemoveCallback = list =>
             {
                 var so = list.serializedProperty.serializedObject;
+                var releaseTargets = TargetsRemovingMissing(list);
                 ReorderableList.defaultBehaviours.DoRemoveButton(list);
                 so.ApplyModifiedProperties();
-                foreach (var target in so.targetObjects)
+                foreach (var target in releaseTargets)
                     StableRefEntry.ReleaseMissingData(target);
                 StableRefMultiEdit.Invalidate();
             };
 
             return rl;
+        }
+
+        /// <summary>
+        /// Targets on which one of the elements about to be removed is a missing entry. Only removing such an
+        /// element releases native missing-type data — removing a healthy element never touches it.
+        /// </summary>
+        private static List<Object> TargetsRemovingMissing(ReorderableList list)
+        {
+            var indices = new HashSet<int>(list.selectedIndices);
+            if (indices.Count == 0 && list.index >= 0) indices.Add(list.index);
+
+            var result = new List<Object>();
+            string arrayPath = list.serializedProperty.propertyPath;
+            foreach (var target in list.serializedProperty.serializedObject.targetObjects)
+            {
+                if (target == null) continue;
+
+                var so = new SerializedObject(target);
+                var arr = so.FindProperty(arrayPath);
+                if (arr == null) continue;
+
+                foreach (int i in indices)
+                {
+                    if (i < 0 || i >= arr.arraySize) continue;
+                    var value = arr.GetArrayElementAtIndex(i).FindPropertyRelative(StableRefEntry.ValueFieldName);
+                    if (value == null || value.propertyType != SerializedPropertyType.ManagedReference) continue;
+                    if (!StableRefEntry.HoldsMissingData(so, value)) continue;
+
+                    result.Add(target);
+                    break;
+                }
+            }
+            return result;
         }
 
         private static void ResetElement(SerializedProperty elem) => StableRefEntry.Clear(elem);

@@ -68,10 +68,20 @@ namespace SST.StableRef.Tests
         public int N;
     }
 
+    [Serializable]
+    public class PlainValueHolder
+    {
+        [SerializeReference, RefSelector] public ITestThing Value;
+    }
+
     public class TestHolder : ScriptableObject
     {
         public StableRef<ITestThing> Ref = new();
         public StableRefList<ITestThing> List = new();
         [SerializeReference, RefSelector] public ITestThing Plain;
+        public List<StableRef<ITestThing>> RawList = new();
+        public StableRef<ITestThing>[] Arr = new StableRef<ITestThing>[0];
+        [SerializeReference, RefSelector] public List<ITestThing> PlainList = new();
+        public List<PlainValueHolder> Holders = new();
     }
 }

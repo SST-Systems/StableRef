@@ -1,7 +1,9 @@
 #if UNITY_EDITOR
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace SST.StableRef
 {
@@ -32,10 +34,10 @@ namespace SST.StableRef
                 && StableRefPropertyUtils.IsListPasteCompatible(arrayProp, listClip.ElementBaseType);
 
             var menu = new GenericMenu();
-            AddItem(menu, "Copy", hasItems, () => CopyList(arrayProp));
-            AddItem(menu, "Paste/Replace", clipFits, () => PasteList(arrayProp, replace: true));
-            AddItem(menu, "Paste/Append", clipFits, () => PasteList(arrayProp, replace: false));
-            AddItem(menu, "Clear", hasItems, () => ClearList(arrayProp));
+            AddItem(menu, "Copy", hasItems, Bind(arrayProp, CopyList));
+            AddItem(menu, "Paste/Replace", clipFits, Bind(arrayProp, p => PasteList(p, replace: true)));
+            AddItem(menu, "Paste/Append", clipFits, Bind(arrayProp, p => PasteList(p, replace: false)));
+            AddItem(menu, "Clear", hasItems, Bind(arrayProp, ClearList));
             menu.ShowAsContext();
         }
 
@@ -49,21 +51,21 @@ namespace SST.StableRef
             bool isInArray = StableRefPropertyUtils.TryGetParentArray(prop, out _, out _);
 
             var menu = new GenericMenu();
-            AddItem(menu, "Copy", hasValue, () => CopyValue(prop));
-            AddItem(menu, "Paste", clipFits, () => PasteValue(prop));
+            AddItem(menu, "Copy", hasValue, Bind(prop, CopyValue));
+            AddItem(menu, "Paste", clipFits, Bind(prop, PasteValue));
 
             if (isInArray)
             {
-                AddItem(menu, "Paste as New Element", clipFits, () => PasteAsNewElement(prop));
+                AddItem(menu, "Paste as New Element", clipFits, Bind(prop, PasteAsNewElement));
                 menu.AddSeparator("");
-                AddItem(menu, "Duplicate Array Element", hasValue, () => DuplicateValue(prop));
-                menu.AddItem(new GUIContent("Delete Array Element"), false, () => DeleteElement(prop));
+                AddItem(menu, "Duplicate Array Element", hasValue, Bind(prop, DuplicateValue));
+                menu.AddItem(new GUIContent("Delete Array Element"), false, Bind(prop, DeleteElement));
             }
 
             if (hasValue || StableRefEntry.HoldsMissingData(prop.serializedObject, prop))
             {
                 menu.AddSeparator("");
-                menu.AddItem(new GUIContent("Set to None"), false, () => SetNone(prop));
+                menu.AddItem(new GUIContent("Set to None"), false, Bind(prop, SetNone));
             }
 
             menu.ShowAsContext();
@@ -83,15 +85,16 @@ namespace SST.StableRef
                     && StableRefPropertyUtils.IsAssignable(prop, StableRefClipboard.ValueType);
                 bool isInArray = StableRefPropertyUtils.TryGetParentArray(prop, out _, out _);
 
-                AddItem(menu, "StableRef/Copy", hasValue, () => CopyValue(prop));
-                AddItem(menu, "StableRef/Paste", clipFits, () => PasteValue(prop));
+                AddItem(menu, "StableRef/Copy", hasValue, Bind(prop, CopyValue));
+                AddItem(menu, "StableRef/Paste", clipFits, Bind(prop, PasteValue));
                 if (isInArray)
                 {
-                    AddItem(menu, "StableRef/Duplicate Array Element", hasValue, () => DuplicateValue(prop));
-                    menu.AddItem(new GUIContent("StableRef/Delete Array Element"), false, () => DeleteElement(prop));
+                    AddItem(menu, "StableRef/Paste as New Element", clipFits, Bind(prop, PasteAsNewElement));
+                    AddItem(menu, "StableRef/Duplicate Array Element", hasValue, Bind(prop, DuplicateValue));
+                    menu.AddItem(new GUIContent("StableRef/Delete Array Element"), false, Bind(prop, DeleteElement));
                 }
                 if (hasValue || StableRefEntry.HoldsMissingData(prop.serializedObject, prop))
-                    menu.AddItem(new GUIContent("StableRef/Set to None"), false, () => SetNone(prop));
+                    menu.AddItem(new GUIContent("StableRef/Set to None"), false, Bind(prop, SetNone));
                 return;
             }
             
@@ -123,10 +126,31 @@ namespace SST.StableRef
             bool clipFits = hasClip
                 && StableRefPropertyUtils.IsListPasteCompatible(arrayProp, listClip.ElementBaseType);
 
-            AddItem(menu, "StableRef/Copy", hasItems, () => CopyList(arrayProp));
-            AddItem(menu, "StableRef/Paste/Replace", clipFits, () => PasteList(arrayProp, replace: true));
-            AddItem(menu, "StableRef/Paste/Append", clipFits, () => PasteList(arrayProp, replace: false));
-            AddItem(menu, "StableRef/Clear", hasItems, () => ClearList(arrayProp));
+            AddItem(menu, "StableRef/Copy", hasItems, Bind(arrayProp, CopyList));
+            AddItem(menu, "StableRef/Paste/Replace", clipFits, Bind(arrayProp, p => PasteList(p, replace: true)));
+            AddItem(menu, "StableRef/Paste/Append", clipFits, Bind(arrayProp, p => PasteList(p, replace: false)));
+            AddItem(menu, "StableRef/Clear", hasItems, Bind(arrayProp, ClearList));
+        }
+
+        /// <summary>
+        /// Menu callbacks run after the menu closes, when the inspector may already have rebuilt (and disposed)
+        /// the <see cref="SerializedObject"/> the menu was opened on — so capture the targets and the property
+        /// path, and resolve a fresh property when the item is picked.
+        /// </summary>
+        private static GenericMenu.MenuFunction Bind(SerializedProperty property, Action<SerializedProperty> action)
+        {
+            var targets = property.serializedObject.targetObjects;
+            string path = property.propertyPath;
+            return () =>
+            {
+                var alive = Array.FindAll(targets, t => t != null);
+                if (alive.Length == 0) return;
+
+                var so = new SerializedObject(alive);
+                so.Update();
+                var prop = so.FindProperty(path);
+                if (prop != null) action(prop);
+            };
         }
 
         private static void AddItem(GenericMenu menu, string label, bool enabled, GenericMenu.MenuFunction action)
@@ -456,8 +480,18 @@ namespace SST.StableRef
             }
 
             string path = arrayProp.propertyPath;
-            foreach (var target in arrayProp.serializedObject.targetObjects)
+            var targets = arrayProp.serializedObject.targetObjects;
+            List<Object> releaseTargets = null;
+            if (replace)
             {
+                releaseTargets = TargetsWithMissingElements(targets, path, out int missingCount);
+                if (!ConfirmDiscardMissingList(missingCount, releaseTargets.Count, "Replace List")) return;
+            }
+
+            foreach (var target in targets)
+            {
+                if (target == null) continue;
+
                 var so = new SerializedObject(target);
                 so.Update();
                 var arr = so.FindProperty(path);
@@ -496,14 +530,94 @@ namespace SST.StableRef
 
                 so.ApplyModifiedProperties();
             }
+
+            ReleaseAfterListDiscard(releaseTargets);
         }
 
         private static void ClearList(SerializedProperty arrayProp)
         {
-            var so = arrayProp.serializedObject;
-            so.Update();
-            arrayProp.ClearArray();
-            so.ApplyModifiedProperties();
+            string path = arrayProp.propertyPath;
+            var targets = arrayProp.serializedObject.targetObjects;
+            var releaseTargets = TargetsWithMissingElements(targets, path, out int missingCount);
+            if (!ConfirmDiscardMissingList(missingCount, releaseTargets.Count, "Clear List")) return;
+
+            foreach (var target in targets)
+            {
+                if (target == null) continue;
+
+                var so = new SerializedObject(target);
+                so.Update();
+                var arr = so.FindProperty(path);
+                if (arr == null) continue;
+
+                arr.ClearArray();
+                so.ApplyModifiedProperties();
+            }
+
+            ReleaseAfterListDiscard(releaseTargets);
+        }
+
+        /// <summary>
+        /// Targets whose list at <paramref name="arrayPath"/> holds at least one missing StableRef entry, and the
+        /// total number of such entries — the recovery data a Clear or Paste/Replace of that list would discard.
+        /// </summary>
+        internal static List<Object> TargetsWithMissingElements(Object[] targets, string arrayPath, out int missingCount)
+        {
+            missingCount = 0;
+            var result = new List<Object>();
+
+            foreach (var target in targets)
+            {
+                if (target == null) continue;
+
+                var so = new SerializedObject(target);
+                var arr = so.FindProperty(arrayPath);
+                if (arr == null || !arr.isArray) continue;
+
+                int before = missingCount;
+                for (int i = 0; i < arr.arraySize; i++)
+                {
+                    var elem = arr.GetArrayElementAtIndex(i);
+                    var value = elem.propertyType == SerializedPropertyType.ManagedReference
+                        ? elem
+                        : elem.FindPropertyRelative(StableRefEntry.ValueFieldName);
+                    if (value == null || value.propertyType != SerializedPropertyType.ManagedReference) continue;
+                    if (StableRefEntry.HoldsMissingData(so, value)) missingCount++;
+                }
+
+                if (missingCount > before) result.Add(target);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Clearing or replacing a list that holds missing entries discards their recovery data — confirmed first,
+        /// like replacing a single missing entry. Returns <see langword="true"/> when nothing is missing or the user
+        /// confirms.
+        /// </summary>
+        private static bool ConfirmDiscardMissingList(int missingCount, int objectCount, string action)
+        {
+            if (missingCount == 0) return true;
+
+            return EditorUtility.DisplayDialog(action,
+                $"{missingCount} entr{(missingCount != 1 ? "ies" : "y")} in this list " +
+                $"{(objectCount > 1 ? $"(on {objectCount} objects) " : "")}" +
+                $"{(missingCount != 1 ? "have types" : "has a type")} that can't be found. " +
+                $"{action} discards the data kept for recovering {(missingCount != 1 ? "them" : "it")}.\n\n" +
+                "If the classes are only missing for a moment (compile errors, switching branches), cancel, " +
+                "fix that and the entries come back by themselves (or via Fix Missing Types).",
+                action, "Cancel");
+        }
+
+        private static void ReleaseAfterListDiscard(List<Object> releaseTargets)
+        {
+            if (releaseTargets != null)
+                foreach (var target in releaseTargets)
+                    StableRefEntry.ReleaseMissingData(target);
+
+            StableRefMultiEdit.Invalidate();
+            StableRefListDrawer.InvalidateCache();
         }
 
         private static Dictionary<string, long> CollectObjectReferences(SerializedProperty root)

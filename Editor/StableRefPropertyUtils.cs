@@ -155,8 +155,9 @@ namespace SST.StableRef
         /// <summary>
         /// The array / list that <paramref name="property"/> is an element of — either the element itself
         /// (<c>…Array.data[i]</c>, a plain <c>[SerializeReference]</c> element) or the <c>Value</c> of a StableRef
-        /// element (<c>…Array.data[i].Value</c>). A reference nested deeper inside an element's value is not an
-        /// element of that array, so element commands (duplicate, delete, insert) never act on the outer list.
+        /// element (<c>…Array.data[i].Value</c>). A reference nested deeper inside an element's value — including a
+        /// plain field that happens to be named <c>Value</c> on a non-StableRef element — is not an element of that
+        /// array, so element commands (duplicate, delete, insert) never act on the outer list.
         /// </summary>
         public static bool TryGetParentArray(SerializedProperty property, out SerializedProperty array, out int index)
         {
@@ -172,7 +173,11 @@ namespace SST.StableRef
             if (openBracket < 0 || closeBracket < 0) return false;
 
             string rest = path.Substring(closeBracket + 1);
-            if (rest.Length != 0 && rest != "." + StableRefEntry.ValueFieldName) return false;
+            if (rest.Length != 0)
+            {
+                if (rest != "." + StableRefEntry.ValueFieldName) return false;
+                if (StableRefEntry.FindWrapperOfValue(property.serializedObject, path) == null) return false;
+            }
 
             string idxStr = path.Substring(openBracket + 1, closeBracket - openBracket - 1);
             if (!int.TryParse(idxStr, out index)) return false;

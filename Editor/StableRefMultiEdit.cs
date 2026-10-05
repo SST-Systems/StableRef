@@ -19,7 +19,8 @@ namespace SST.StableRef
     {
         private const int MaxCacheEntries = 512;
 
-        private static readonly Dictionary<(SerializedObject, string), bool> _mixedCache = new();
+        private static readonly Dictionary<(SerializedObject, string, bool), bool> _mixedCache = new();
+        private static bool _syncing;
 
         [InitializeOnLoadMethod]
         private static void Register()
@@ -41,7 +42,7 @@ namespace SST.StableRef
 
         private static UndoPropertyModification[] OnPostprocessModifications(UndoPropertyModification[] mods)
         {
-            Invalidate();
+            if (!_syncing) Invalidate();
             return mods;
         }
 
@@ -55,7 +56,7 @@ namespace SST.StableRef
             var shared = valueProp.serializedObject;
             if (!shared.isEditingMultipleObjects) return false;
 
-            var key = (shared, valueProp.propertyPath);
+            var key = (shared, valueProp.propertyPath, wrapperPath != null);
             if (_mixedCache.TryGetValue(key, out bool cached)) return cached;
 
             bool mixed = false;
@@ -76,7 +77,12 @@ namespace SST.StableRef
                     var wrapper = so.FindProperty(wrapperPath);
                     if (wrapper != null)
                     {
-                        if (StableRefEntry.Sync(wrapper)) so.ApplyModifiedProperties();
+                        if (StableRefEntry.Sync(wrapper))
+                        {
+                            _syncing = true;
+                            try { so.ApplyModifiedProperties(); }
+                            finally { _syncing = false; }
+                        }
                         if (StableRefEntry.IsMissing(wrapper))
                             signature += "|" + wrapper.FindPropertyRelative(StableRefEntry.TypeIdFieldName).stringValue;
                     }

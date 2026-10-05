@@ -120,7 +120,8 @@ namespace SST.StableRef
             var win = CreateInstance<StableRefSelectorWindow>();
             win._targets = property.serializedObject.targetObjects;
             win._valuePath = property.propertyPath;
-            bool mixed = StableRefMultiEdit.IsMixed(property);
+            string wrapperPath = StableRefEntry.FindWrapperOfValue(property.serializedObject, property.propertyPath)?.propertyPath;
+            bool mixed = StableRefMultiEdit.IsMixed(property, wrapperPath);
             win._currentType = mixed ? null : property.managedReferenceValue?.GetType();
             win.Open(btnRect, entries);
             if (mixed) win._selectedIndex = -1;

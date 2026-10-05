@@ -69,14 +69,17 @@ namespace SST.StableRef
 
         /// <summary>
         /// Releases Unity's native missing-type data of <paramref name="target"/> after an explicit discard or a
-        /// fix: drops the records in <paramref name="discardedIds"/>, then everything else once nothing on the
-        /// object still depends on it — no StableRef entry is still missing and no plain <c>[SerializeReference]</c>
-        /// field still points at missing data. Clears the inspector's "contains SerializeReference types which are
+        /// fix: drops the records in <paramref name="discardedIds"/>, then everything else once no StableRef entry
+        /// on the object is still missing. Clears the inspector's "contains SerializeReference types which are
         /// missing" warning without waiting for a domain reload.
         /// </summary>
         /// <remarks>
         /// The full clear is what makes the warning go away reliably: a discarded value can leave records whose id
-        /// can't be matched from the property side. It never runs while any entry or field still needs the data.
+        /// can't be matched from the property side. Unity reports a field whose class can't be loaded as null
+        /// (<c>managedReferenceId == -2</c>, also in <c>GetManagedReferenceIds</c> and JSON), so the records of
+        /// plain <c>[SerializeReference]</c> / <see cref="RefSelectorAttribute"/> fields and of never-stamped
+        /// entries can't be told apart and are cleared too — call this only after an explicit fix or discard of a
+        /// missing StableRef entry.
         /// </remarks>
         internal static void ReleaseMissingData(UnityEngine.Object target, IEnumerable<long> discardedIds = null)
         {
