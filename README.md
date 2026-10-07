@@ -29,10 +29,9 @@ StableRef makes working with polymorphic serialized references stable and comfor
   - [Reflection and serializers](#reflection-and-serializers)
   - [Generic value types](#generic-value-types)
   - [Selector without a wrapper: \[RefSelector\]](#selector-without-a-wrapper-refselector)
-  - [Keyboard navigation in the selector](#keyboard-navigation-in-the-selector)
 - [Auto-generated ID](#auto-generated-id)
   - [Types you can't edit: RefTypeIdFor](#types-you-cant-edit-reftypeidfor)
-- [Newtonsoft.Json](#newtonsoftjson)
+- [Samples](#samples)
 - [Editor tools](#editor-tools)
 - [Inspector integration](#inspector-integration)
 - [Copying and pasting](#copying-and-pasting)
@@ -183,6 +182,8 @@ else if (StableRefReflection.IsStableRefList(field.FieldType, out var elementTyp
 
 **Writing into assets in the editor.** Code can't capture the snapshot, and for a value of a new type it can't stamp the ID either — the inspector does that when the field is drawn. A tool that writes values into assets in the editor (a config importer, a baker, a reserialize tool) should call `StableRefResync.ResyncObject(asset)` on every changed object before saving, or run **Tools → StableRef → Resync All** afterwards (see [Editor tools](#editor-tools)). Otherwise the snapshot keeps describing the previous values, and recovery after a class rename would bring those back.
 
+**Newtonsoft.Json:** a ready converter ships as a sample — [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.md).
+
 ### Generic value types
 
 The selector also supports closed generic element types. For a field like `StableRefList<ICondition<Unit>>`, open generic definitions that satisfy it (e.g. `All<TContext>`, `Any<TContext>`) are offered and closed with the field's own argument (`All<Unit>`). Each type used as a generic argument needs its own stable ID — its own file, or `[RefTypeId]` — just like any other StableRef type.
@@ -204,22 +205,6 @@ public class EffectAuthoring : MonoBehaviour
 The field stays an ordinary `[SerializeReference]`: code reads `_onPickup` directly (no `.Value`), and the attribute is `[Conditional("UNITY_EDITOR")]`, so it is not even emitted into player builds. This is useful for ECS authoring/baking code, for existing `[SerializeReference]` fields you don't want to migrate, and for large lists where per-entry metadata isn't worth it. The selector offers every instantiable type, including types without a stable id; copy/paste from the context menu works as usual.
 
 > **Use at your own risk.** `[RefSelector]` fields have **no rename protection**: renaming or moving the value's class breaks the reference exactly as with a bare `[SerializeReference]`. They are deliberately **not** covered by **Find Usages** or **Fix Missing Types**. A field whose class is gone simply shows an empty selector (`None`) and can be replaced without confirmation. To rename a class safely, add Unity's `[MovedFrom]` (`UnityEngine.Scripting.APIUpdating`) to it. If you need refactor-proof, tracked references, use `StableRef<T>`.
-
-### Keyboard navigation in the selector
-
-The selector can be driven without the mouse; the arrows work like in Unity's Hierarchy and Project windows. It opens with the current type selected, and the search field keeps focus, so you can type to filter at any time.
-
-| Key | Action |
-|---|---|
-| `↑` / `↓`, `PageUp` / `PageDown` | Move the selection over types and categories |
-| `→` | Expand the selected collapsed category; otherwise jump down to the next category |
-| `←` | Collapse the selected expanded category; otherwise jump to the parent category (at the top level — to the previous one) |
-| `Alt` + `→` / `←` | Expand / collapse the category with everything below it |
-| `Enter` | Pick the selected type (or toggle the selected category) |
-| `Home` / `End` | First / last row |
-| `Esc` | Close without changes |
-
-While a search is typed the list is flat: `Enter` picks the highlighted match (the first one by default), and `←` / `→` / `Home` / `End` edit the search text.
 
 ---
 
@@ -258,29 +243,13 @@ For a source-generated `partial` class you can also put `[RefTypeId]` on your ow
 
 ---
 
-## Newtonsoft.Json
+## Samples
 
-By default Newtonsoft.Json sees `StableRef<T>` as an ordinary class: it writes the wrapper's fields (`TypeId` and `Value`, in the editor also `ValuesData`, `ObjectRefs` and the rest of the snapshot) instead of the value, and reads a value written for a bare field into nothing. The **Newtonsoft.Json Converter** sample adds a converter that makes a wrapper field read and write **exactly the JSON of the same field declared as a bare `T` / `List<T>`**.
+Import via **Window → Package Manager → StableRef → Samples**. Each sample has its own README with the setup and a description of how it works.
 
-Import it from **Window → Package Manager → StableRef → Samples → Newtonsoft.Json Converter → Import**. It is copied to `Assets/Samples/StableRef/<version>/Newtonsoft.Json Converter/` as the `SST.StableRef.Newtonsoft` assembly, with its EditMode tests. If you installed StableRef by copying it into `Assets/`, copy the `Samples~/NewtonsoftJson` folder from the repository instead. Re-import the sample after upgrading StableRef.
-
-```csharp
-using SST.StableRef.Json;
-
-var settings = new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.Auto };
-settings.Converters.Add(new StableRefJsonConverter());
-
-// { "effect": { "$type": "...", "Damage": 7 }, "Effects": [ ... ] } — same as for IEffect / List<IEffect>
-var json = JsonConvert.SerializeObject(config, settings);
-```
-
-- The sample needs Newtonsoft.Json in the project: the `com.unity.nuget.newtonsoft-json` package or any `Newtonsoft.Json.dll` (for example one shipped with an SDK). Without it the imported sample doesn't compile — install Newtonsoft or delete the sample folder.
-- The value goes through your serializer with `T` as the declared type, so `TypeNameHandling.Auto`, converters registered for `T` (e.g. a custom `$type` scheme for an interface) and `JsonSerializer.Populate` into an existing value behave as for a bare field. A list follows `ObjectCreationHandling` like `List<T>`: it appends to an existing list unless it is `Replace`.
-- **Fields that used to be `T[]`:** Newtonsoft always replaces arrays, so `Populate` into an existing object never duplicated their elements. Create the converter with `new StableRefJsonConverter(replaceLists: true)` to keep that: lists are then always replaced, never appended to.
-- Values are assigned like `Set` / `SetBoxedValues`: entries are reused, and an entry whose value keeps its type keeps its stable ID. Run `StableRefResync.ResyncObject` after deserializing into assets in the editor (see [Reflection and serializers](#reflection-and-serializers)).
-- `null` empties the wrapper or the list — unlike a bare field, the field keeps its instance and is never `null` after loading.
-- Member-level settings on the wrapper field itself (`[JsonProperty(TypeNameHandling = ...)]`, `ItemTypeNameHandling`, `ItemConverterType`) don't reach a converter and don't apply; set them in `JsonSerializerSettings` or on the base type.
-- JSON written without the converter (the wrapper's own fields — from the editor or from a player build) is still read, and so are 3.x lists written as arrays of wrappers. An object counts as a wrapper when it has `TypeId` and `Value` and no members other than the wrapper's.
+| Sample | What it shows |
+|---|---|
+| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.md) | `StableRef<T>` / `StableRefList<T>` fields read and write exactly the JSON of bare `T` / `List<T>` fields — for remote configs, saves and server payloads; JSON written without the converter stays readable. Requires Newtonsoft.Json; includes EditMode tests. |
 
 ---
 
