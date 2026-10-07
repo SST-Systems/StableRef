@@ -129,11 +129,11 @@ namespace SST.StableRef.Tests
 
             Assert.AreEqual(2, a.List.Count);
             Assert.AreEqual(2, b.List.Count);
-            Assert.AreEqual(1, ((BetaThing)a.List[1].Value).B);
-            Assert.AreEqual(2, ((BetaThing)b.List[1].Value).B, "b duplicated its own value, not a's");
-            Assert.AreNotSame(a.List[0].Value, a.List[1].Value);
-            Assert.AreNotSame(a.List[1].Value, b.List[1].Value, "no instance shared between objects");
-            Assert.AreEqual("stableref-tests.beta", b.List[1].TypeId);
+            Assert.AreEqual(1, ((BetaThing)a.List[1]).B);
+            Assert.AreEqual(2, ((BetaThing)b.List[1]).B, "b duplicated its own value, not a's");
+            Assert.AreNotSame(a.List[0], a.List[1]);
+            Assert.AreNotSame(a.List[1], b.List[1], "no instance shared between objects");
+            Assert.AreEqual("stableref-tests.beta", b.List.Items[1].TypeId);
         }
 
         [Test]
@@ -168,7 +168,7 @@ namespace SST.StableRef.Tests
 
             Menu("DuplicateValue", new SerializedObject(holder).FindProperty("List._items.Array.data[0].Value"));
 
-            var copy = (AlphaThing)holder.List[1].Value;
+            var copy = (AlphaThing)holder.List[1];
             Assert.AreEqual(9, copy.Number);
             Assert.AreSame(referenced, copy.Direct);
         }
@@ -190,12 +190,12 @@ namespace SST.StableRef.Tests
 
             Assert.AreEqual(3, a.List.Count);
             Assert.AreEqual(3, b.List.Count);
-            Assert.IsInstanceOf<BetaThing>(a.List[1].Value, "inserted right below the clicked element");
-            Assert.IsInstanceOf<AlphaThing>(a.List[2].Value);
-            Assert.AreEqual(11, ((BetaThing)b.List[1].Value).B);
-            Assert.AreNotSame(a.List[1].Value, b.List[1].Value);
-            Assert.AreEqual("stableref-tests.beta", a.List[1].TypeId);
-            Assert.IsFalse(string.IsNullOrEmpty(a.List[1].TypeDisplayName));
+            Assert.IsInstanceOf<BetaThing>(a.List[1], "inserted right below the clicked element");
+            Assert.IsInstanceOf<AlphaThing>(a.List[2]);
+            Assert.AreEqual(11, ((BetaThing)b.List[1]).B);
+            Assert.AreNotSame(a.List[1], b.List[1]);
+            Assert.AreEqual("stableref-tests.beta", a.List.Items[1].TypeId);
+            Assert.IsFalse(string.IsNullOrEmpty(a.List.Items[1].TypeDisplayName));
         }
 
         [Test]
@@ -227,8 +227,8 @@ namespace SST.StableRef.Tests
 
             Assert.AreEqual(1, a.List.Count);
             Assert.AreEqual(1, b.List.Count);
-            Assert.IsInstanceOf<BetaThing>(b.List[0].Value);
-            Assert.AreEqual("stableref-tests.beta", b.List[0].TypeId, "metadata moves with the element");
+            Assert.IsInstanceOf<BetaThing>(b.List[0]);
+            Assert.AreEqual("stableref-tests.beta", b.List.Items[0].TypeId, "metadata moves with the element");
         }
 
         [Test]
@@ -256,8 +256,8 @@ namespace SST.StableRef.Tests
             broken.List.Add(new BetaThing());
             broken.List.Add(new BetaThing());
             SyncList(broken);
-            broken.List[0].Value = null; // missing: stable id kept, value gone
-            broken.List[2].Value = null;
+            broken.List.Items[0].Value = null; // missing: stable id kept, value gone
+            broken.List.Items[2].Value = null;
 
             var healthy = NewHolder();
             healthy.List.Add(new BetaThing());
@@ -407,7 +407,7 @@ namespace SST.StableRef.Tests
             holder.List.Add(new BetaThing());
             holder.List.Add(new BetaThing());
             SyncList(holder);
-            holder.List[0].Value = null; // a missing entry: stable id kept, value gone
+            holder.List.Items[0].Value = null; // a missing entry: stable id kept, value gone
 
             var so = new SerializedObject(holder);
             var list = new UnityEditorInternal.ReorderableList(so, so.FindProperty("List._items"));

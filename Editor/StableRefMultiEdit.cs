@@ -77,7 +77,7 @@ namespace SST.StableRef
                     var wrapper = so.FindProperty(wrapperPath);
                     if (wrapper != null)
                     {
-                        if (StableRefEntry.Sync(wrapper))
+                        if (!StableRefEntry.IsInheritedFromPrefab(wrapper) && StableRefEntry.Sync(wrapper))
                         {
                             _syncing = true;
                             try { so.ApplyModifiedProperties(); }

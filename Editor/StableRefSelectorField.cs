@@ -1,7 +1,6 @@
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 
@@ -98,6 +97,17 @@ namespace SST.StableRef
             if (mixed || property.propertyType != SerializedPropertyType.ManagedReference) return h;
             if (property.managedReferenceValue == null || !property.isExpanded) return h;
 
+            var custom = StableRefDrawing.ChildrenDrawer;
+            if (custom != null)
+            {
+                if (!HasVisibleChildren(property)) return h;
+                int prevIndent = EditorGUI.indentLevel;
+                EditorGUI.indentLevel++;
+                float childrenH = custom.GetChildrenHeight(property);
+                EditorGUI.indentLevel = prevIndent;
+                return h + EditorGUIUtility.standardVerticalSpacing + childrenH;
+            }
+
             var child = property.Copy();
             var end = property.GetEndProperty();
             if (child.NextVisible(true))
@@ -133,6 +143,13 @@ namespace SST.StableRef
 
         private static void DrawChildren(Rect rect, SerializedProperty property)
         {
+            var custom = StableRefDrawing.ChildrenDrawer;
+            if (custom != null)
+            {
+                custom.DrawChildren(rect, property);
+                return;
+            }
+
             var child = property.Copy();
             var end = property.GetEndProperty();
             float y = rect.y;
@@ -154,11 +171,10 @@ namespace SST.StableRef
             var key = (value.GetType(), StableRefSelectorWindow.ShowCategoryInLabel);
             if (_labelCache.TryGetValue(key, out var cached)) return cached;
 
-            var t = key.Item1;
-            var cat = t.GetCustomAttribute<RefCategoryAttribute>();
-            string text = cat != null && key.Item2
-                ? $"{cat.Category}/{StableRefGenericUtils.DisplayName(t)}"
-                : StableRefGenericUtils.DisplayName(t);
+            var meta = StableRefTypeMetadata.Get(key.Item1);
+            string text = key.Item2 && !string.IsNullOrEmpty(meta.Category)
+                ? $"{meta.Category}/{meta.DisplayName}"
+                : meta.DisplayName;
             return _labelCache[key] = text;
         }
 

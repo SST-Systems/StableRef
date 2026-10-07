@@ -11,7 +11,7 @@ namespace SST.StableRef
 {
     public sealed class StableRefMissingTypesWindow : EditorWindow
     {
-        [MenuItem("Tools/StableRef/Fix Missing Types")]
+        [MenuItem("Tools/StableRef/Fix Missing Types", priority = 200)]
         public static void Open()
         {
             var w = GetWindow<StableRefMissingTypesWindow>("Fix Missing StableRef Types");
@@ -357,6 +357,7 @@ namespace SST.StableRef
             public bool IsSceneObject;
             public List<MissingRefInfo> MissingRefs;
             public string TypeName;
+            public string Label;
             public List<string> GoNameChain;
             public bool SceneLoaded;
             public string SceneName;
@@ -372,57 +373,16 @@ namespace SST.StableRef
             _hasScanned = true;
             _showDomainReloadHint = false;
 
-            var assetGuids = AssetDatabase.FindAssets("t:ScriptableObject", new[] { "Assets" })
-                .Concat(AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" }))
-                .Distinct()
-                .ToArray();
-
-            int total = assetGuids.Length;
-            int idx = 0;
-
-            try
+            StableRefEditorUtility.ScanProject("Scanning assets…", source =>
             {
-                foreach (var guid in assetGuids)
-                {
-                    var path = AssetDatabase.GUIDToAssetPath(guid);
-                    if (EditorUtility.DisplayCancelableProgressBar("Scanning assets…", path, (float)idx++ / total))
-                        break;
-
-                    var asset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(path);
-                    if (asset == null) continue;
-
-                    if (asset is GameObject go)
-                    {
-                        foreach (var comp in go.GetComponentsInChildren<Component>(true))
-                            if (comp != null) CollectMissing(comp, path, isScene: false);
-                    }
-                    else
-                    {
-                        CollectMissing(asset, path, isScene: false);
-                    }
-                }
-
-                ScanActiveScenes();
-            }
-            finally { EditorUtility.ClearProgressBar(); }
+                foreach (var target in source.Targets)
+                    CollectMissing(target, source.Path, source.IsScene, sceneLoaded: source.IsScene,
+                        sceneName: source.IsScene ? source.Scene.name : null);
+            });
 
             BuildTree();
             EditorUtility.UnloadUnusedAssetsImmediate();
             Repaint();
-        }
-
-        private void ScanActiveScenes()
-        {
-            for (int i = 0; i < SceneManager.sceneCount; i++)
-            {
-                var scene = SceneManager.GetSceneAt(i);
-                if (!scene.isLoaded) continue;
-
-                foreach (var root in scene.GetRootGameObjects())
-                foreach (var comp in root.GetComponentsInChildren<Component>(true))
-                    if (comp != null)
-                        CollectMissing(comp, scene.path, isScene: true, sceneLoaded: true, sceneName: scene.name);
-            }
         }
 
         private void CollectMissing(UnityEngine.Object target, string assetPath, bool isScene,
@@ -455,6 +415,7 @@ namespace SST.StableRef
                 IsSceneObject = isScene,
                 MissingRefs = missingRefs,
                 TypeName = target.GetType().Name,
+                Label = StableRefEditorUtility.ScanTargetLabel(target),
                 GoNameChain = goChain,
                 SceneLoaded = sceneLoaded,
                 SceneName = sceneName
@@ -572,7 +533,7 @@ namespace SST.StableRef
                         var compNode = new Node
                         {
                             Kind = NodeKind.Component,
-                            Label = entry.TypeName,
+                            Label = entry.Label,
                             Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
                             PingTarget = entry.Target,
                             ObjectId = entry.ObjectId,

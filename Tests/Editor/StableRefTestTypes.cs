@@ -1,6 +1,11 @@
 using System;
 using System.Collections.Generic;
+using SST.StableRef;
+using SST.StableRef.Tests;
 using UnityEngine;
+
+[assembly: RefTypeIdFor(typeof(MappedThing), "stableref-tests.mapped")]
+[assembly: RefTypeIdFor(typeof(MappedGeneric<>), "stableref-tests.mapped-generic")]
 
 namespace SST.StableRef.Tests
 {
@@ -66,6 +71,43 @@ namespace SST.StableRef.Tests
     public class NoIdThing : ITestThing
     {
         public int N;
+    }
+
+    /// <summary>Derives from a [RefTypeId] type without an id of its own, in a shared file — so it has no stable id.</summary>
+    [Serializable]
+    public class AlphaChild : AlphaThing
+    {
+        public int Extra;
+    }
+
+    /// <summary>No [RefTypeId], shares a file — its id comes from [assembly: RefTypeIdFor].</summary>
+    [Serializable]
+    public class MappedThing : ITestThing
+    {
+        public int M;
+    }
+
+    [Serializable]
+    public class MappedGeneric<TArg> : ITestThing
+    {
+        public TArg Arg;
+    }
+
+    [Serializable]
+    [RefTypeId("stableref-tests.meta")]
+    public class MetaThing : ITestThing { }
+
+    public class TestMetadataProvider : IRefTypeMetadataProvider
+    {
+        public int Order => 0;
+
+        public bool TryGetMetadata(Type type, out RefTypeMetadata metadata)
+        {
+            metadata = default;
+            if (type != typeof(MetaThing)) return false;
+            metadata = new RefTypeMetadata { DisplayName = "Pretty Meta", Category = "Meta/Sub", Tooltip = "tip", Color = Color.red, SortOrder = -5 };
+            return true;
+        }
     }
 
     [Serializable]

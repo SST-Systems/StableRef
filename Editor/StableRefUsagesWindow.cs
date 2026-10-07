@@ -429,25 +429,29 @@ namespace SST.StableRef
                 var path = AssetDatabase.GUIDToAssetPath(guids[i]);
                 if (!path.StartsWith("Assets/")) continue;
 
-                var so = AssetDatabase.LoadAssetAtPath<ScriptableObject>(path);
-                if (so == null) continue;
-
-                var compNode = new Node
+                Node assetNode = null;
+                foreach (var target in StableRefEditorUtility.LoadScanTargets(path))
                 {
-                    Kind = NodeKind.Component, Label = so.GetType().Name,
-                    Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
-                    PingTarget = so
-                };
-                ScanSerializedObject(new SerializedObject(so), compNode, so);
-                if (compNode.Children.Count == 0) continue;
+                    if (target is not ScriptableObject so) continue;
 
-                var assetNode = new Node
-                {
-                    Kind = NodeKind.Asset, Label = Path.GetFileNameWithoutExtension(path),
-                    Icon = AssetDatabase.GetCachedIcon(path), PingTarget = so
-                };
-                assetNode.Children.Add(compNode);
-                group.Children.Add(assetNode);
+                    var compNode = new Node
+                    {
+                        Kind = NodeKind.Component, Label = StableRefEditorUtility.ScanTargetLabel(so),
+                        Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
+                        PingTarget = so
+                    };
+                    ScanSerializedObject(new SerializedObject(so), compNode, so);
+                    if (compNode.Children.Count == 0) continue;
+
+                    assetNode ??= new Node
+                    {
+                        Kind = NodeKind.Asset, Label = Path.GetFileNameWithoutExtension(path),
+                        Icon = AssetDatabase.GetCachedIcon(path), PingTarget = AssetDatabase.LoadMainAssetAtPath(path)
+                    };
+                    assetNode.Children.Add(compNode);
+                }
+
+                if (assetNode != null) group.Children.Add(assetNode);
             }
         }
 

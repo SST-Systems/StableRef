@@ -65,7 +65,7 @@ namespace SST.StableRef
             GUIContent label, StableRefSelectorField.Options options)
         {
             bool multi = property.serializedObject.isEditingMultipleObjects;
-            if (!multi) StableRefEntry.Sync(property);
+            if (!multi && !StableRefEntry.IsInheritedFromPrefab(property)) StableRefEntry.Sync(property);
 
             var fieldRect = new Rect(position.x, position.y, position.width - BtnW - 2f, position.height);
             var btnRect = new Rect(position.xMax - BtnW, position.y, BtnW, EditorGUIUtility.singleLineHeight);

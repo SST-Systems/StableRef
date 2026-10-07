@@ -6,6 +6,12 @@ using UnityEngine;
 
 namespace SST.StableRef
 {
+    /// <summary>
+    /// Maps value types to their stable ids and back. Id priority: <see cref="RefTypeIdAttribute"/> on the type,
+    /// then an assembly-level <see cref="RefTypeIdForAttribute"/>, then the MonoScript GUID (the script file must
+    /// declare exactly that class). Closed generic types get a composite id built from their definition and
+    /// arguments. Lookups are cached, misses included.
+    /// </summary>
     public static class StableRefTypeRegistry
     {
         private static readonly Dictionary<string, Type> _idToType = new();
@@ -40,12 +46,18 @@ namespace SST.StableRef
                 return composite;
             }
 
-            var attr = (RefTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(RefTypeIdAttribute));
+            var attr = GetOwnIdAttribute(type);
 
             if (attr != null)
             {
                 Register(attr.Id, type);
                 return attr.Id;
+            }
+
+            if (AssemblyIds.TypeToId.TryGetValue(type, out var mapped))
+            {
+                Register(mapped, type);
+                return mapped;
             }
 
             var searchName = type.Name;
@@ -67,7 +79,9 @@ namespace SST.StableRef
             }
 
             _missingTypes.Add(type);
-            Debug.LogWarning($"[StableRef] '{type.Name}' needs its own file to get a stable ID (or add [RefTypeId]).");
+            Debug.LogWarning(
+                $"[StableRef] '{type.FullName}' has no stable ID: add [RefTypeId], move it to its own file, or map it " +
+                "with [assembly: RefTypeIdFor(...)].");
             return null;
         }
 
@@ -117,13 +131,26 @@ namespace SST.StableRef
 
             foreach (var t in TypeCache.GetTypesWithAttribute<RefTypeIdAttribute>())
             {
-                var attr = (RefTypeIdAttribute)Attribute.GetCustomAttribute(t, typeof(RefTypeIdAttribute));
+                var attr = GetOwnIdAttribute(t);
                 if (attr != null && attr.Id == id) { Register(id, t); return t; }
+            }
+
+            if (AssemblyIds.IdToType.TryGetValue(id, out var mappedType))
+            {
+                Register(id, mappedType);
+                return mappedType;
             }
 
             _missingIds.Add(id);
             return null;
         }
+
+        /// <summary>
+        /// The <see cref="RefTypeIdAttribute"/> declared on <paramref name="type"/> itself — never one of a base class,
+        /// or every derived class would share its base's id.
+        /// </summary>
+        private static RefTypeIdAttribute GetOwnIdAttribute(Type type)
+            => (RefTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(RefTypeIdAttribute), inherit: false);
 
         private static void Register(string id, Type type)
         {
@@ -141,8 +168,94 @@ namespace SST.StableRef
         {
             if (type.IsGenericType && !type.IsGenericTypeDefinition) return fallback;
 
-            var attr = (RefTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(RefTypeIdAttribute));
-            return string.IsNullOrEmpty(attr?.Id) ? fallback : attr.Id;
+            var attr = GetOwnIdAttribute(type);
+            if (!string.IsNullOrEmpty(attr?.Id)) return attr.Id;
+            return AssemblyIds.TypeToId.TryGetValue(type, out var mapped) ? mapped : fallback;
+        }
+
+        private sealed class AssemblyIdMap
+        {
+            public readonly Dictionary<Type, string> TypeToId = new();
+            public readonly Dictionary<string, Type> IdToType = new();
+        }
+
+        private static AssemblyIdMap _assemblyIds;
+        private static AssemblyIdMap AssemblyIds => _assemblyIds ??= BuildAssemblyIdMap();
+
+        private static AssemblyIdMap BuildAssemblyIdMap()
+        {
+            var map = new AssemblyIdMap();
+            var attributeIds = new Dictionary<string, Type>();
+            foreach (var type in TypeCache.GetTypesWithAttribute<RefTypeIdAttribute>())
+            {
+                var attr = GetOwnIdAttribute(type);
+                if (!string.IsNullOrEmpty(attr?.Id) && !attributeIds.ContainsKey(attr.Id)) attributeIds[attr.Id] = type;
+            }
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                object[] attrs;
+                try { attrs = assembly.GetCustomAttributes(typeof(RefTypeIdForAttribute), inherit: false); }
+                catch (Exception) { continue; }
+
+                foreach (RefTypeIdForAttribute attr in attrs)
+                {
+                    string where = $"[assembly: RefTypeIdFor] in '{assembly.GetName().Name}'";
+
+                    if (attr.Type == null || string.IsNullOrEmpty(attr.Id))
+                    {
+                        Debug.LogError($"[StableRef] {where} needs a type and a non-empty id.");
+                        continue;
+                    }
+
+                    if (attr.Type.IsGenericType && !attr.Type.IsGenericTypeDefinition)
+                    {
+                        Debug.LogError(
+                            $"[StableRef] {where} maps the closed generic type '{attr.Type.FullName}'. Map its definition " +
+                            "and arguments instead — the closed type's id is combined from theirs.");
+                        continue;
+                    }
+
+                    var own = GetOwnIdAttribute(attr.Type);
+                    if (own != null)
+                    {
+                        Debug.LogError(
+                            $"[StableRef] {where} maps '{attr.Type.FullName}' to \"{attr.Id}\", but the type already has " +
+                            $"[RefTypeId(\"{own.Id}\")], which wins. Remove the mapping.");
+                        continue;
+                    }
+
+                    if (map.TypeToId.TryGetValue(attr.Type, out var existingId))
+                    {
+                        if (existingId != attr.Id)
+                            Debug.LogError(
+                                $"[StableRef] '{attr.Type.FullName}' is mapped to both \"{existingId}\" and \"{attr.Id}\" by " +
+                                $"[assembly: RefTypeIdFor]. Keeping \"{existingId}\".");
+                        continue;
+                    }
+
+                    if (attributeIds.TryGetValue(attr.Id, out var attributeOwner))
+                    {
+                        Debug.LogError(
+                            $"[StableRef] Duplicate id \"{attr.Id}\": [RefTypeId] on '{attributeOwner.FullName}' and " +
+                            $"{where} for '{attr.Type.FullName}'. IDs must be unique; the [RefTypeId] wins.");
+                        continue;
+                    }
+
+                    if (map.IdToType.TryGetValue(attr.Id, out var existingType))
+                    {
+                        Debug.LogError(
+                            $"[StableRef] Duplicate id \"{attr.Id}\" in [assembly: RefTypeIdFor] for '{existingType.FullName}' " +
+                            $"and '{attr.Type.FullName}'. IDs must be unique.");
+                        continue;
+                    }
+
+                    map.TypeToId[attr.Type] = attr.Id;
+                    map.IdToType[attr.Id] = attr.Type;
+                }
+            }
+
+            return map;
         }
 
         [InitializeOnLoadMethod]
@@ -151,7 +264,7 @@ namespace SST.StableRef
             var byId = new Dictionary<string, Type>();
             foreach (var type in TypeCache.GetTypesWithAttribute<RefTypeIdAttribute>())
             {
-                var attr = (RefTypeIdAttribute)Attribute.GetCustomAttribute(type, typeof(RefTypeIdAttribute));
+                var attr = GetOwnIdAttribute(type);
                 if (attr == null || string.IsNullOrEmpty(attr.Id)) continue;
 
                 if (byId.TryGetValue(attr.Id, out var first))
@@ -164,6 +277,8 @@ namespace SST.StableRef
                     byId[attr.Id] = type;
                 }
             }
+
+            _ = AssemblyIds; // builds the map now, so mapping errors are logged on load
         }
 
         private static bool LooksLikeGuid(string id)
