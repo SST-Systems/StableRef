@@ -1,0 +1,26 @@
+{
+    "name": "SST.StableRef.Newtonsoft.Tests",
+    "rootNamespace": "SST.StableRef.Tests",
+    "references": [
+        "SST.StableRef",
+        "SST.StableRef.Newtonsoft",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll",
+        "Newtonsoft.Json.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

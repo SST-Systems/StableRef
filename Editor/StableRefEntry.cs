@@ -130,6 +130,14 @@ namespace SST.StableRef
             return false;
         }
 
+        /// <summary>
+        /// True when <paramref name="entry"/> belongs to a prefab instance (or variant) and isn't overridden there: its
+        /// data comes from the source prefab, so stamping metadata here would only create an override. Such entries are
+        /// synced in their source prefab — the drawer, multi-object editing and Resync all follow this rule.
+        /// </summary>
+        internal static bool IsInheritedFromPrefab(SerializedProperty entry)
+            => !entry.prefabOverride && PrefabUtility.IsPartOfPrefabInstance(entry.serializedObject.targetObject);
+
         /// <summary>Content color the built-in drawer uses for a missing entry's label.</summary>
         public static readonly Color MissingLabelColor = new Color(0.65f, 0.65f, 0.65f);
 
@@ -162,6 +170,61 @@ namespace SST.StableRef
         }
 
         /// <summary>
+        /// Brings all metadata of an entry that holds a value in line with that value: <see cref="Sync"/>, and the
+        /// snapshot re-captured even when the type is unchanged (code may have changed the value's fields). An id
+        /// left over from another type is cleared together with its snapshot when the current type has no stable id,
+        /// so recovery can't recreate the wrong type. Returns whether anything changed; missing and empty entries are
+        /// left as they are.
+        /// </summary>
+        /// <remarks>
+        /// The inspector keeps entries in sync as they are edited; this is for values written by code (importers,
+        /// generators, <c>field.Value = ...</c>) — see <see cref="StableRefResync"/>.
+        /// </remarks>
+        public static bool Refresh(SerializedProperty entry)
+        {
+            if (!TryGetValueProperty(entry, out var valueProp)) return false;
+            var type = valueProp.managedReferenceValue?.GetType();
+            if (type == null) return false;
+
+            if (StableRefTypeRegistry.GetOrAssignId(type) == null)
+            {
+                var typeIdProp = entry.FindPropertyRelative(TypeIdFieldName);
+                if (typeIdProp == null || string.IsNullOrEmpty(typeIdProp.stringValue)) return false;
+                if (StableRefTypeRegistry.GetType(typeIdProp.stringValue) == type) return false;
+
+                typeIdProp.stringValue = string.Empty;
+                var dispProp = entry.FindPropertyRelative(TypeDisplayNameFieldName);
+                if (dispProp != null) dispProp.stringValue = StableRefGenericUtils.DisplayName(type);
+                ClearSnapshot(entry);
+                return true;
+            }
+
+            if (Sync(entry)) return true;
+
+            string before = SnapshotSignature(entry);
+            StableRefSnapshotCodec.Capture(entry, valueProp);
+            return SnapshotSignature(entry) != before;
+        }
+
+        private static string SnapshotSignature(SerializedProperty entry)
+        {
+            var sb = new System.Text.StringBuilder(entry.FindPropertyRelative(ValuesDataFieldName)?.stringValue);
+            var refs = entry.FindPropertyRelative(ObjectRefsFieldName);
+            var paths = entry.FindPropertyRelative(ObjectRefPathsFieldName);
+            int count = Math.Max(refs?.arraySize ?? 0, paths?.arraySize ?? 0);
+            for (int i = 0; i < count; i++)
+            {
+                sb.Append('\n');
+                if (refs != null && i < refs.arraySize)
+                    sb.Append(StableRefEditorUtility.GetObjectReferenceId(refs.GetArrayElementAtIndex(i)));
+                sb.Append('@');
+                if (paths != null && i < paths.arraySize)
+                    sb.Append(paths.GetArrayElementAtIndex(i).stringValue);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
         /// Fully resets the entry: sets <c>Value</c> to <see langword="null"/> and clears all metadata —
         /// <c>TypeId</c>, <c>TypeDisplayName</c>, <c>ObjectRefs</c>, <c>ObjectRefPaths</c>, <c>ValuesData</c>.
         /// Use it wherever an entry is emptied so no stale recovery data survives.
@@ -178,6 +241,11 @@ namespace SST.StableRef
             if (typeIdProp != null) typeIdProp.stringValue = string.Empty;
             var dispProp = entry.FindPropertyRelative(TypeDisplayNameFieldName);
             if (dispProp != null) dispProp.stringValue = string.Empty;
+            ClearSnapshot(entry);
+        }
+
+        private static void ClearSnapshot(SerializedProperty entry)
+        {
             entry.FindPropertyRelative(ObjectRefsFieldName)?.ClearArray();
             entry.FindPropertyRelative(ObjectRefPathsFieldName)?.ClearArray();
             var valuesDataProp = entry.FindPropertyRelative(ValuesDataFieldName);

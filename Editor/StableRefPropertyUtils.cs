@@ -15,7 +15,15 @@ namespace SST.StableRef
             public string Name;
             public string FullPath;
             public string FullPathLower;
+            /// <summary>
+            /// Lower-case text the selector search matches: <see cref="FullPath"/>, plus the type's own name when a
+            /// <see cref="IRefTypeMetadataProvider"/> shows it under another one.
+            /// </summary>
+            public string SearchText;
             public string Category;
+            public string Tooltip;
+            public Color? Color;
+            public int SortOrder;
         }
 
         private const string ManagedRefPrefix = "managedReference<";
@@ -259,18 +267,7 @@ namespace SST.StableRef
                 if (!IsInstantiableReferenceValue(t)) continue;
                 if (requireStableId && StableRefTypeRegistry.GetOrAssignId(t) == null) continue;
 
-                var cat = t.GetCustomAttribute<RefCategoryAttribute>();
-                string catS = cat?.Category ?? "";
-                string fullPath = string.IsNullOrEmpty(catS) ? t.Name : $"{catS}/{t.Name}";
-
-                result.Add(new TypeEntry
-                {
-                    Type = t,
-                    Name = t.Name,
-                    FullPath = fullPath,
-                    FullPathLower = fullPath.ToLowerInvariant(),
-                    Category = catS
-                });
+                result.Add(CreateEntry(t));
             }
             if (baseType.IsGenericType && !baseType.IsGenericTypeDefinition)
             {
@@ -279,27 +276,39 @@ namespace SST.StableRef
                     if (!IsInstantiableReferenceValue(closed)) continue;
                     if (requireStableId && StableRefTypeRegistry.GetOrAssignId(closed) == null) continue;
 
-                    var gcat = closed.GetCustomAttribute<RefCategoryAttribute>();
-                    string gcatS = gcat?.Category ?? "";
-                    string gname = StableRefGenericUtils.DisplayName(closed);
-                    string gfullPath = string.IsNullOrEmpty(gcatS) ? gname : $"{gcatS}/{gname}";
-
-                    result.Add(new TypeEntry
-                    {
-                        Type = closed,
-                        Name = gname,
-                        FullPath = gfullPath,
-                        FullPathLower = gfullPath.ToLowerInvariant(),
-                        Category = gcatS
-                    });
+                    result.Add(CreateEntry(closed));
                 }
             }
 
-            result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.Ordinal));
+            result.Sort((a, b) =>
+            {
+                int byOrder = a.SortOrder.CompareTo(b.SortOrder);
+                return byOrder != 0 ? byOrder : string.Compare(a.Name, b.Name, StringComparison.Ordinal);
+            });
 
             var arr = result.ToArray();
             _typeCache[(baseType, requireStableId)] = arr;
             return arr;
+        }
+
+        private static TypeEntry CreateEntry(Type t)
+        {
+            var meta = StableRefTypeMetadata.Get(t);
+            string fullPath = string.IsNullOrEmpty(meta.Category) ? meta.DisplayName : $"{meta.Category}/{meta.DisplayName}";
+            string fullPathLower = fullPath.ToLowerInvariant();
+            string typeName = StableRefGenericUtils.DisplayName(t);
+            return new TypeEntry
+            {
+                Type = t,
+                Name = meta.DisplayName,
+                FullPath = fullPath,
+                FullPathLower = fullPathLower,
+                SearchText = typeName == meta.DisplayName ? fullPathLower : fullPathLower + "\n" + typeName.ToLowerInvariant(),
+                Category = meta.Category,
+                Tooltip = meta.Tooltip,
+                Color = meta.Color,
+                SortOrder = meta.SortOrder ?? 0
+            };
         }
 
         /// <summary>

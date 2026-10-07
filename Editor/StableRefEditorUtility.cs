@@ -1,8 +1,10 @@
 #if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace SST.StableRef
 {
@@ -121,6 +123,28 @@ namespace SST.StableRef
             return path;
         }
 
+        /// <summary>
+        /// The managed-reference property holding the value of <paramref name="property"/>: the <c>Value</c> of a
+        /// <see cref="StableRef{T}"/> entry, or the property itself for a plain <c>[SerializeReference]</c> field;
+        /// <see langword="null"/> for anything else.
+        /// </summary>
+        /// <remarks>
+        /// For inspector code that finds a field by name and reads its managed reference — it keeps working when the
+        /// field changes from <c>[SerializeReference] T</c> to <see cref="StableRef{T}"/>. Write values through
+        /// <see cref="StableRefEntry"/> (<c>Sync</c> after assigning, <c>Clear</c> to empty), not through this property
+        /// alone.
+        /// </remarks>
+        public static SerializedProperty GetValueProperty(SerializedProperty property)
+        {
+            if (property == null) return null;
+            if (property.propertyType == SerializedPropertyType.ManagedReference) return property;
+            if (property.propertyType != SerializedPropertyType.Generic) return null;
+
+            var value = property.FindPropertyRelative(StableRefEntry.ValueFieldName);
+            if (value == null || value.propertyType != SerializedPropertyType.ManagedReference) return null;
+            return property.FindPropertyRelative(StableRefEntry.TypeIdFieldName) != null ? value : null;
+        }
+
         public static void PingScript(Type type)
         {
             if (type == null) return;
@@ -163,6 +187,102 @@ namespace SST.StableRef
 #else
             return EditorUtility.InstanceIDToObject((int)id);
 #endif
+        }
+
+        /// <summary>
+        /// One source visited by <see cref="ScanProject"/>: an asset file under <c>Assets/</c> or an open scene, with
+        /// the objects in it that can hold serialized StableRef entries.
+        /// </summary>
+        internal struct ScanSource
+        {
+            /// <summary>Asset path, or the scene's path (empty for an unsaved scene).</summary>
+            public string Path;
+            public bool IsScene;
+            /// <summary>The scene; valid only when <see cref="IsScene"/>.</summary>
+            public Scene Scene;
+            /// <summary>See <see cref="LoadScanTargets"/>; for a scene, every component in it.</summary>
+            public List<UnityEngine.Object> Targets;
+        }
+
+        /// <summary>
+        /// The scan shared by the project-wide tools: every ScriptableObject asset (sub-assets included) and prefab
+        /// under <c>Assets/</c>, then every loaded open scene, under a cancelable progress bar (canceling skips the
+        /// remaining assets; the open scenes are still visited). Never opens, closes or saves anything and doesn't
+        /// unload what it loaded — call <c>EditorUtility.UnloadUnusedAssetsImmediate</c> once done with the targets.
+        /// </summary>
+        internal static void ScanProject(string progressTitle, Action<ScanSource> visit)
+        {
+            var guids = AssetDatabase.FindAssets("t:ScriptableObject", new[] { "Assets" })
+                .Concat(AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" }))
+                .Distinct()
+                .ToArray();
+
+            try
+            {
+                for (int i = 0; i < guids.Length; i++)
+                {
+                    var path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                    if (EditorUtility.DisplayCancelableProgressBar(progressTitle, path, (float)i / guids.Length))
+                        break;
+
+                    var targets = LoadScanTargets(path);
+                    if (targets.Count > 0) visit(new ScanSource { Path = path, Targets = targets });
+                }
+
+                for (int i = 0; i < SceneManager.sceneCount; i++)
+                {
+                    var scene = SceneManager.GetSceneAt(i);
+                    if (!scene.isLoaded) continue;
+
+                    var targets = new List<UnityEngine.Object>();
+                    foreach (var root in scene.GetRootGameObjects())
+                        AddComponents(root, targets);
+                    visit(new ScanSource { Path = scene.path, IsScene = true, Scene = scene, Targets = targets });
+                }
+            }
+            finally { EditorUtility.ClearProgressBar(); }
+        }
+
+        /// <summary>
+        /// The objects of the asset file at <paramref name="path"/> that can hold StableRef entries: every component
+        /// of a prefab (missing scripts skipped), or the ScriptableObjects of any other file — the main asset first,
+        /// then the sub-assets stored in the same file (graph nodes, Timeline clips, <c>StateMachineBehaviour</c>s).
+        /// </summary>
+        internal static List<UnityEngine.Object> LoadScanTargets(string path)
+        {
+            var targets = new List<UnityEngine.Object>();
+            var main = AssetDatabase.LoadMainAssetAtPath(path);
+            if (main == null) return targets;
+
+            if (main is GameObject go)
+            {
+                AddComponents(go, targets);
+                return targets;
+            }
+
+            if (main is ScriptableObject) targets.Add(main);
+            foreach (var obj in AssetDatabase.LoadAllAssetsAtPath(path))
+                if (obj is ScriptableObject && obj != main)
+                    targets.Add(obj);
+            return targets;
+        }
+
+        /// <summary>
+        /// Label of a scanned object in the tool windows: its type name, prefixed by its own name for a ScriptableObject
+        /// sub-asset — a file can hold many sub-assets of one type.
+        /// </summary>
+        internal static string ScanTargetLabel(UnityEngine.Object target)
+        {
+            string typeName = target.GetType().Name;
+            return target is ScriptableObject && AssetDatabase.IsSubAsset(target) && !string.IsNullOrEmpty(target.name)
+                ? $"{target.name} ({typeName})"
+                : typeName;
+        }
+
+        private static void AddComponents(GameObject root, List<UnityEngine.Object> targets)
+        {
+            foreach (var comp in root.GetComponentsInChildren<Component>(true))
+                if (comp != null) targets.Add(comp);
         }
     }
 }

@@ -61,6 +61,7 @@ namespace SST.StableRef
         private readonly Dictionary<string, (List<StableRefPropertyUtils.TypeEntry> items, int depth)> _pendingDirectItems = new();
 
         private static readonly GUIContent _tempContent = new();
+        private static readonly GUIContent _rowContent = new();
 
         private struct RowItem
         {
@@ -307,9 +308,16 @@ namespace SST.StableRef
                 else if (current) EditorGUI.DrawRect(r, _currentColor);
             }
 
+            float textX = r.x + TextX + row.Depth * Indent;
+            var accent = row.Entry?.Color;
+            if (accent.HasValue && Event.current.type == EventType.Repaint)
+                EditorGUI.DrawRect(new Rect(textX - 5f, r.y + 3f, 3f, r.height - 6f), accent.Value);
+
+            _rowContent.text = row.Label;
+            _rowContent.tooltip = row.Entry?.Tooltip;
             EditorGUI.LabelField(
-                new Rect(r.x + TextX + row.Depth * Indent, r.y, r.width - TextX - row.Depth * Indent - 2f, r.height),
-                row.Label, (selected || current) ? EditorStyles.whiteLabel : EditorStyles.label);
+                new Rect(textX, r.y, r.width - TextX - row.Depth * Indent - 2f, r.height),
+                _rowContent, (selected || current) ? EditorStyles.whiteLabel : EditorStyles.label);
 
             if (inR && Event.current.type == EventType.MouseDown)
             { clicked = index; Event.current.Use(); }
@@ -620,7 +628,7 @@ namespace SST.StableRef
             {
                 string q = _search.ToLowerInvariant();
                 foreach (var e in _entries)
-                    if (e.FullPathLower.Contains(q))
+                    if (e.SearchText.Contains(q))
                         _rows.Add(new RowItem { Entry = e, Label = e.Name });
             }
             else

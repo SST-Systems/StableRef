@@ -130,6 +130,26 @@ namespace SST.StableRef.Tests
         }
 
         [Test]
+        public void Recreate_ReadsV2Snapshot()
+        {
+            var holder = NewHolder();
+            var so = new SerializedObject(holder);
+            so.FindProperty("Ref.TypeId").stringValue = "stableref-tests.alpha";
+            so.FindProperty("Ref.ValuesData").stringValue = "#v2\nNumber=7\nKind=9\nText=a%3Db;c%0Ad";
+            so.ApplyModifiedProperties();
+
+            so.Update();
+            Assert.IsTrue(StableRefEntry.TryRecreate(so.FindProperty("Ref")));
+            so.ApplyModifiedProperties();
+
+            var alpha = holder.Ref.Value as AlphaThing;
+            Assert.NotNull(alpha);
+            Assert.AreEqual(7, alpha.Number);
+            Assert.AreEqual(TestKind.C, alpha.Kind, "v2 enum encoding is by underlying value");
+            Assert.AreEqual("a=b;c\nd", alpha.Text);
+        }
+
+        [Test]
         public void TryRecreate_LeavesUnresolvableEntryUntouched()
         {
             var holder = NewHolder();
@@ -212,6 +232,7 @@ namespace SST.StableRef.Tests
             CollectionAssert.DoesNotContain(types, typeof(MonoThing));
             CollectionAssert.DoesNotContain(types, typeof(NoCtorThing));
             CollectionAssert.DoesNotContain(types, typeof(NoIdThing), "no stable id → not offered for StableRef");
+            CollectionAssert.DoesNotContain(types, typeof(AlphaChild), "a derived class doesn't borrow its base's id");
         }
 
         [Test]
@@ -306,13 +327,13 @@ namespace SST.StableRef.Tests
             duplicate.Invoke(null, new object[] { valueProp });
 
             Assert.AreEqual(2, holder.List.Count, "duplicate inserted");
-            var first = holder.List[0].Value as BetaThing;
-            var second = holder.List[1].Value as BetaThing;
+            var first = holder.List[0] as BetaThing;
+            var second = holder.List[1] as BetaThing;
             Assert.NotNull(first);
             Assert.NotNull(second);
             Assert.AreEqual(7, second.B, "duplicated data");
             Assert.AreNotSame(first, second, "independent instances");
-            Assert.AreEqual("stableref-tests.beta", holder.List[1].TypeId, "duplicate metadata stamped");
+            Assert.AreEqual("stableref-tests.beta", holder.List.Items[1].TypeId, "duplicate metadata stamped");
         }
     }
 }

@@ -10,9 +10,10 @@ namespace SST.StableRef
     /// Optional: if omitted, StableRef falls back to the type's MonoScript GUID as the identifier. Provide
     /// an explicit id for types you expect to refactor heavily, since it survives even if the script file
     /// is deleted and re-created. The id must be unique across the project — use a namespaced string
-    /// (e.g. <c>"my-package.damage-on-hit"</c>) to avoid collisions.
+    /// (e.g. <c>"my-package.damage-on-hit"</c>) to avoid collisions. The attribute is not inherited: a derived class
+    /// needs its own id (or its own script file for the GUID fallback).
     /// </remarks>
-    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Interface)]
+    [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct | AttributeTargets.Interface, Inherited = false)]
     public sealed class RefTypeIdAttribute : Attribute
     {
         /// <summary>The stable identifier stored in serialized data and used to resolve the type.</summary>
