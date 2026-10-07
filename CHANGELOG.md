@@ -1,5 +1,11 @@
 # StableRef
 
+## 4.0.1 - 07.10.2026
+
+### Changed
+
+- **The Newtonsoft.Json Converter sample has its own README in English and Russian** (`Samples~/NewtonsoftJson/README.md`, `README.ru.md`): setup, how writing and reading work, how JSON written without the converter is recognized, limitations. The package README now lists samples in a *Samples* table and links there instead of describing the converter inline, so the description travels with the imported sample.
+
 ## 4.0.0 - 07.10.2026
 
 ### Breaking
