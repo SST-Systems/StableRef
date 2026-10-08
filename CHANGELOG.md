@@ -1,5 +1,11 @@
 # StableRef
 
+## 4.1.1 - 08.10.2026
+
+### Fixed
+
+- ***Assets → Find StableRef Usages* reads the script's assembly name without cutting off part of it.** Unity reports the name with a `.dll` suffix, and the menu removed it as a file extension, that is, everything after the last dot. If an editor version reported the name without the suffix, `SST.StableRef.Editor` would become `SST.StableRef`, and the menu would wait for the declaration index of the wrong assembly: matches by script name would appear only a moment after the scan instead of together with it. Now only a `.dll` suffix is removed.
+
 ## 4.1.0 - 08.10.2026
 
 ### Added

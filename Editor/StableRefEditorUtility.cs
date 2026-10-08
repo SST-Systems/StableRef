@@ -254,8 +254,9 @@ namespace SST.StableRef
         internal static void RequestDeclaringIndex(MonoScript script, bool wait)
         {
             if (script == null) return;
-            string assembly = Path.GetFileNameWithoutExtension(
-                CompilationPipeline.GetAssemblyNameFromScriptPath(AssetDatabase.GetAssetPath(script)) ?? "");
+            string assembly = CompilationPipeline.GetAssemblyNameFromScriptPath(AssetDatabase.GetAssetPath(script)) ?? "";
+            if (assembly.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                assembly = assembly.Substring(0, assembly.Length - 4);
             if (assembly.Length > 0) RequestSourceIndex(assembly, background: !wait);
         }
 
