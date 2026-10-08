@@ -188,6 +188,8 @@ else if (StableRefReflection.IsStableRefList(field.FieldType, out var elementTyp
 
 The selector also supports closed generic element types. For a field like `StableRefList<ICondition<Unit>>`, open generic definitions that satisfy it (e.g. `All<TContext>`, `Any<TContext>`) are offered and closed with the field's own argument (`All<Unit>`). Each type used as a generic argument needs its own stable ID — its own file, or `[RefTypeId]` — just like any other StableRef type.
 
+The selector's gear button holds its settings: size, *Category in Label*, and *Deep Search* (off by default). With Deep Search on, the search also matches the name of the script file that declares each type, so `Conditions` finds `HeroUnlockData` declared in `Conditions.cs`, along with every other class of that file. It needs an index of the source files of the types' assemblies: it is built once per domain reload in the background, starting when the selector opens. Until it is ready, the search matches type names only.
+
 ### Selector without a wrapper: [RefSelector]
 
 When you want only the inspector selector — no wrapper type, no stored id, nothing extra in serialized data or in the build — mark a plain `[SerializeReference]` field with `[RefSelector]`:
@@ -257,9 +259,11 @@ Import via **Window → Package Manager → StableRef → Samples**. Each sample
 
 All tools are available under **Tools → StableRef** in the Unity menu bar.
 
-**What the tools scan:** prefabs and ScriptableObject assets under `Assets/` — including ScriptableObjects stored as sub-assets inside another asset file (graph nodes, Timeline clips, `StateMachineBehaviour`s), which are listed under their file in the *Scriptable Objects* group as `Name (Type)` — and the scenes that are already open. Packages and closed scenes are not scanned.
+**What the tools scan:** prefabs and ScriptableObject assets under `Assets/` — including ScriptableObjects stored as sub-assets inside another asset file (graph nodes, Timeline clips, `StateMachineBehaviour`s), which are listed under their file in the *Scriptable Objects* group as `Name (Type)` — and the scenes that are already open. Packages and closed scenes are not scanned. With text serialization (*Force Text*, Unity's default) files are first checked as text, in parallel, and only those that hold StableRef data — or instantiate a prefab that does (variants, nested prefabs) — are loaded; binary files are always loaded.
 
-**Find Usages** (`Tools/StableRef/Find Usages`) — scans prefabs, active scenes, and scriptable objects to show every place a selected type is used. Also accessible via right-click on a script asset: `Assets/Find StableRef Usages`.
+**Result trees.** Find Usages and Fix Missing Types show their results in a tree that draws only the visible rows, so tens of thousands of results scroll smoothly. After a scan only the groups (*Prefabs*, *Active Scenes*, *Scriptable Objects*) are expanded. Click a row to ping its object, click the arrow or double-click to expand, `Alt`+click to expand or collapse everything under it. The keyboard works as in the Hierarchy: `↑` `↓` `Home` `End` `PageUp` `PageDown` move, `→` expands / goes to the first child, `←` collapses / goes to the parent, `Enter` pings. The search runs once typing pauses for a moment. The search field matches asset, object, field and type names, and for a value also the name of the script that declares its type, so a script name finds every type of that file; a matching row is shown with everything under it, and every row on the way to a match is expanded while the search is active.
+
+**Find Usages** (`Tools/StableRef/Find Usages`) — scans prefabs, active scenes, and scriptable objects to show every place a selected type is used. Also accessible via right-click on a script asset: `Assets/Find StableRef Usages` — it searches by the script's name, so every type declared in the file is found, including several classes per file. Clicking a value (`SR: Type`) pings the script that declares the type, double-clicking opens it.
 
 <p align="center">
   <img src="Documentation~/find-usages.gif" alt="Find Usages window" width="640">

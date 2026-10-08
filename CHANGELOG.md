@@ -1,5 +1,29 @@
 # StableRef
 
+## 4.1.0 - 08.10.2026
+
+### Added
+
+- **Deep Search in the type selector** (gear button, off by default, `StableRefSelectorWindow.DeepSearch`). With it, the search also matches the name of the script file that declares each type, so a file holding several classes, or a class named unlike its file, is found by the file name. The file names come from an index of the source files of the types' assemblies, built in the background once per domain reload. Typing never waits for the index: until it is ready, only type names match.
+- **`StableRefEditorUtility.FindScript(Type)`** returns the script that declares a type (the lookup behind the find-script button, now public; `PingScript` wraps it), or `null` for types without source, such as those from a precompiled DLL.
+
+### Fixed
+
+- **The find-script button pings classes in differently named files, several classes per file, nested types and generic types.** It only accepted a script whose `MonoScript.GetClass()` was the type itself, and Unity associates one class with each file, so the magnifier next to the selector and a click on a type in Find Usages did nothing for a `Data` class declared in its `Condition.cs`, for a second class in a file, for `Window.Payload` or for `Foo<T>`. It now tries the file named after the outermost class (without the `` `N `` suffix) and then falls back to the source files of the type's assembly, indexed once per assembly until the next domain reload. When several files declare the name, the one with the type's namespace wins.
+- **Find Usages covers scripts that declare several types.** *Assets → Find StableRef Usages* searched for the one class `MonoScript.GetClass()` returned. For a script without a class named like its file, such as a `Condition.cs` holding a `ConditionProcessor` and a `ConditionData`, that is just one of its classes, often not the one used in assets, so nothing was found. It now searches by the script's name, and the search field matches the name of the script that declares each value's type as well as the row text, so all types of that file are listed. The menu item is validated by a text check only, so right-clicking a script never waits for type lookups.
+
+### Changed
+
+- **Project scans load and walk only what can hold StableRef data.** Find Usages, Fix Missing Types, Resync All and the Metadata Size Report loaded every prefab and ScriptableObject under `Assets/` and walked every serialized property of every component. In a project with 4,400 such files, of which 900 held StableRef data, Find Usages took 90 seconds. Now:
+  - With text serialization, files are checked as text first, in parallel, and only those containing StableRef entries are loaded, along with prefabs that instantiate such a prefab (variants and nested prefabs show their source's entries). Binary files are loaded as before.
+  - Find Usages skips components and assets whose type can't hold a StableRef, as the other tools already did.
+  - Property walks skip strings, object references and arrays of primitives and built-in types.
+  - Values are checked through their serialized type name instead of being deserialized.
+  - Field resolution is cached for all elements of an array at once, and display labels per object.
+
+  Results are the same as before.
+- **Find Usages and Fix Missing Types draw only the visible rows.** Every repaint walked and laid out the whole expanded tree, so scrolling stuttered with tens of thousands of results. Rows now have a fixed height and only those in view are drawn. Only the top groups are expanded after a scan, the keyboard works as in the Hierarchy (arrows, Home / End, PageUp / PageDown, Enter), and the search also matches asset, object and field names: a match is shown with everything under it, and the path to it is expanded while the search is active. The search runs once typing pauses for a moment, not on every keystroke, and re-matching tens of thousands of rows allocates nothing. Double-clicking a value in Find Usages opens its script.
+- **Removed `StableRefEditorUtility.FoldoutStyle`, `HeaderStyle`, `EnsureStyles` and `OverrideTextColors`.** They only styled the old foldout trees of the tool windows, nothing in StableRef uses them any more, and they hold no StableRef logic. Code that used them can make the same styles itself: `new GUIStyle(EditorStyles.foldout)` / `new GUIStyle(EditorStyles.foldoutHeader)`, with `normal.textColor` copied to the `onNormal`, `focused`, `onFocused`, `active` and `onActive` states.
 ## 4.0.1 - 07.10.2026
 
 ### Changed

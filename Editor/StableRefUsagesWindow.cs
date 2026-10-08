@@ -2,10 +2,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using NodeKind = SST.StableRef.StableRefResultTree.NodeKind;
 
 namespace SST.StableRef
 {
@@ -16,29 +19,21 @@ namespace SST.StableRef
         private const float ClearBtnW = 18f;
         private const float DefaultW = 360f;
         private const float DefaultH = 560f;
+        private const string ProgressTitle = "StableRef Usages";
 
-        private enum NodeKind { Group, Asset, GameObject, Component, Item }
-
-        private sealed class Node
+        private sealed class Node : StableRefResultTree.Node
         {
-            public NodeKind Kind;
-            public string Label;
-            public Texture Icon;
             public Type ConcreteType;
-            public UnityEngine.Object PingTarget;
             public string PrefabAssetPath;
             public string TransformPath;
             public string ScenePath;
-            public readonly List<Node> Children = new();
-            public bool Expanded = true;
         }
 
-        private List<Node> _roots;
-        private Vector2 _scroll;
+        private List<StableRefResultTree.Node> _roots;
+        private StableRefResultTree _tree;
         private string _searchText = "";
-        private readonly HashSet<Node> _visibleNodes = new();
-        private bool _visibilityDirty;
-        private Node _selectedNode;
+        /// <summary>A type whose declaration index was still being built when the filter last ran.</summary>
+        private Type _pendingSearchType;
 
         private static readonly Dictionary<Type, Texture> _iconCache = new();
 
@@ -51,41 +46,77 @@ namespace SST.StableRef
                 win.position = new Rect(win.position.x, win.position.y, DefaultW, DefaultH);
         }
 
+        private static readonly Regex ClassDeclarationRegex = new(@"\b(?:class|struct|record)\s+\w", RegexOptions.Compiled);
+
+        /// <summary>
+        /// Searches the usages of every type declared in the selected script — the search matches the declaring script's
+        /// name too, so a file with several classes (or a class named unlike its file) is covered as a whole.
+        /// </summary>
         [MenuItem("Assets/Find StableRef Usages", priority = 27)]
         private static void OpenFromAsset()
         {
             var ms = Selection.activeObject as MonoScript;
             if (ms == null) return;
-            var type = ms.GetClass();
-            if (type == null) return;
+
+            // The filter matches script names through the declaration index: build it during the scan and wait for it
+            // afterwards, so the result doesn't fill in a moment after the scan.
+            StableRefEditorUtility.RequestDeclaringIndex(ms, wait: false);
 
             var win = GetWindow<StableRefUsagesWindow>("StableRef Usages");
             win.minSize = new Vector2(DefaultW, 160f);
-            win._searchText = type.Name;
+            win._searchText = ms.name;
+            win._tree.Filter = ms.name;
             win.RunSearch();
+
+            StableRefEditorUtility.RequestDeclaringIndex(ms, wait: true);
         }
 
+        /// <summary>A text check only — the menu is validated whenever it opens, so no type is resolved here.</summary>
         [MenuItem("Assets/Find StableRef Usages", validate = true, priority = 27)]
         private static bool OpenFromAssetValidate()
-        {
-            var ms = Selection.activeObject as MonoScript;
-            if (ms == null) return false;
-            var type = ms.GetClass();
-            return type != null && !type.IsAbstract && !type.IsInterface;
-        }
+            => Selection.activeObject is MonoScript ms && ClassDeclarationRegex.IsMatch(ms.text);
 
         private void OnEnable()
         {
             _roots = null;
             _searchText = "";
-            _visibleNodes.Clear();
-            _visibilityDirty = true;
-            _selectedNode = null;
+            _tree = new StableRefResultTree
+            {
+                Clicked = OnNodeClicked,
+                ResolveIcon = n => ((Node)n).ConcreteType is { } type ? GetTypeIcon(type) : n.Icon,
+                ExtraSearchText = n => GetScriptSearchName((Node)n),
+                EmptyGroupText = "No usages found"
+            };
+        }
+
+        /// <summary>
+        /// Lower-case name of the script declaring the type of a value <paramref name="node"/>, shared by all values of
+        /// that type; null for other rows. It comes from the declaration index, built in the background: until it is
+        /// ready only labels match and the filter runs again once it is (see <see cref="Update"/>), so typing never
+        /// waits for the index.
+        /// </summary>
+        private string GetScriptSearchName(Node node)
+        {
+            var type = node.ConcreteType;
+            if (type == null) return null;
+            if (StableRefEditorUtility.TryGetDeclaringFileSearchName(type, out var name)) return name;
+
+            _pendingSearchType ??= type;
+            return null;
+        }
+
+        private void Update()
+        {
+            if (_tree.ApplyTypedFilter()) Repaint();
+
+            if (_pendingSearchType == null || !StableRefEditorUtility.TryGetDeclaringFileName(_pendingSearchType, out _)) return;
+            _pendingSearchType = null;
+            _tree.RefreshFilter();
+            Repaint();
         }
 
         private void OnGUI()
         {
-            StableRefEditorUtility.EnsureStyles();
             DrawToolbar();
 
             if (_roots == null)
@@ -96,31 +127,9 @@ namespace SST.StableRef
                 return;
             }
 
-            if (_roots.Count == 0)
-            {
-                EditorGUILayout.HelpBox("No StableRef usages found.", MessageType.Info);
-                return;
-            }
-
-            RefreshVisibilityIfNeeded();
-
-            bool anyVisible = false;
-            foreach (var root in _roots)
-                if (IsVisible(root)) { anyVisible = true; break; }
-
-            if (!anyVisible)
-            {
-                EditorGUILayout.HelpBox("No usages match the current filter.", MessageType.Info);
-                return;
-            }
-
-            _scroll = GUILayout.BeginScrollView(_scroll);
-            EditorGUI.indentLevel = 0;
-            EditorGUIUtility.SetIconSize(new Vector2(16, 16));
-            foreach (var root in _roots)
-                if (IsVisible(root)) DrawNode(root, 0);
-            EditorGUIUtility.SetIconSize(Vector2.zero);
-            GUILayout.EndScrollView();
+            var rect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none,
+                GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+            _tree.OnGUI(rect);
         }
 
         private void DrawToolbar()
@@ -132,7 +141,7 @@ namespace SST.StableRef
                     GUILayout.Width(SearchW));
                 if (EditorGUI.EndChangeCheck())
                 {
-                    InvalidateVisibility();
+                    _tree.SetFilterDelayed(_searchText);
                     Repaint();
                 }
 
@@ -140,7 +149,7 @@ namespace SST.StableRef
                     && GUILayout.Button("✕", EditorStyles.toolbarButton, GUILayout.Width(ClearBtnW)))
                 {
                     _searchText = "";
-                    InvalidateVisibility();
+                    _tree.Filter = "";
                     GUI.FocusControl(null);
                     Repaint();
                 }
@@ -152,199 +161,27 @@ namespace SST.StableRef
             }
         }
 
-        private void InvalidateVisibility() => _visibilityDirty = true;
-
-        private void RefreshVisibilityIfNeeded()
+        private static void OnNodeClicked(StableRefResultTree.Node n, int clickCount)
         {
-            if (!_visibilityDirty) return;
-            _visibilityDirty = false;
-            _visibleNodes.Clear();
-            foreach (var root in _roots)
-                ComputeVisible(root);
-        }
-
-        private bool ComputeVisible(Node node)
-        {
-            if (node.Kind == NodeKind.Group)
+            var node = (Node)n;
+            if (node.ConcreteType != null && node.Children.Count == 0)
             {
-                foreach (var c in node.Children)
-                    ComputeVisible(c);
-                _visibleNodes.Add(node);
-                return true;
-            }
-
-            bool vis;
-            if (node.Children.Count > 0)
-            {
-                vis = false;
-                foreach (var c in node.Children)
-                    if (ComputeVisible(c)) vis = true;
-            }
-            else
-            {
-                bool textOk = string.IsNullOrEmpty(_searchText)
-                    || node.Label.IndexOf(_searchText, StringComparison.OrdinalIgnoreCase) >= 0;
-                vis = textOk;
-            }
-            if (vis) _visibleNodes.Add(node);
-            return vis;
-        }
-
-        private bool IsVisible(Node node) => _visibleNodes.Contains(node);
-
-        private void DrawNode(Node node, int depth)
-        {
-            switch (node.Kind)
-            {
-                case NodeKind.Group:
-                    EditorGUI.indentLevel = 0;
-                    node.Expanded = DrawFoldout(node, node.Expanded, node.Label, null, StableRefEditorUtility.HeaderStyle);
-                    if (node.Expanded)
-                    {
-                        bool anyChildVisible = false;
-                        foreach (var c in node.Children)
-                            if (IsVisible(c)) { anyChildVisible = true; break; }
-
-                        if (anyChildVisible)
-                            DrawVisibleChildren(node.Children, depth + 1);
-                        else
-                        {
-                            EditorGUI.indentLevel = 1;
-                            using (new EditorGUI.DisabledScope(true))
-                                EditorGUILayout.LabelField(node.Children.Count == 0 ? "No usages found" : "No matches");
-                        }
-                    }
-                    return;
-
-                case NodeKind.Asset:
-                    EditorGUI.indentLevel = 1;
-                    node.Expanded = DrawFoldout(node, node.Expanded, node.Label, node.Icon);
-                    if (node.Expanded) DrawVisibleChildren(node.Children, 0);
-                    return;
-
-                case NodeKind.GameObject:
-                    EditorGUI.indentLevel = 2 + depth;
-                    node.Expanded = DrawFoldout(node, node.Expanded, node.Label, node.Icon);
-                    if (node.Expanded) DrawVisibleChildren(node.Children, depth + 1);
-                    return;
-
-                case NodeKind.Component:
-                    EditorGUI.indentLevel = 2 + depth;
-                    node.Expanded = DrawFoldout(node, node.Expanded, node.Label, node.Icon);
-                    if (node.Expanded) DrawVisibleChildren(node.Children, depth);
-                    return;
-
-                case NodeKind.Item:
-                    EditorGUI.indentLevel = 3 + depth;
-                    if (node.Children.Count > 0)
-                    {
-                        var prevColor = GUI.color;
-                        if (node.Icon == null) GUI.color = new Color(1f, 1f, 1f, 0.55f);
-                        node.Expanded = DrawFoldout(node, node.Expanded, node.Label, node.Icon);
-                        GUI.color = prevColor;
-                        if (node.Expanded) DrawVisibleChildren(node.Children, depth + 1);
-                    }
-                    else
-                    {
-                        DrawLeaf(node);
-                    }
-                    return;
-            }
-        }
-
-        private void DrawVisibleChildren(List<Node> children, int depth)
-        {
-            foreach (var c in children)
-                if (IsVisible(c)) DrawNode(c, depth);
-        }
-
-        private bool DrawFoldout(Node node, bool expanded, string label, Texture icon, GUIStyle style = null)
-        {
-            bool altHeld = (Event.current.modifiers & EventModifiers.Alt) != 0;
-            var ev = Event.current;
-            var drawStyle = style ?? StableRefEditorUtility.FoldoutStyle;
-
-            var rowRect = GUILayoutUtility.GetRect(
-                new GUIContent(label, icon), drawStyle,
-                GUILayout.Height(EditorGUIUtility.singleLineHeight));
-
-            bool selectable = node.Kind != NodeKind.Group;
-            bool isSelected = selectable && _selectedNode == node;
-
-            if (isSelected && ev.type == EventType.Repaint)
-                EditorGUI.DrawRect(new Rect(0, rowRect.y, position.width, rowRect.height), StableRefEditorUtility.SelectionColor);
-
-            var prevContent = GUI.contentColor;
-            if (isSelected) GUI.contentColor = StableRefEditorUtility.SelectionTextColor;
-
-            bool newExpanded = EditorGUI.Foldout(rowRect, expanded,
-                new GUIContent(label, icon), toggleOnLabelClick: false, drawStyle);
-
-            GUI.contentColor = prevContent;
-
-            if (ev.type == EventType.MouseDown && ev.button == 0)
-            {
-                var indented = EditorGUI.IndentedRect(rowRect);
-                var labelRect = new Rect(indented.x + StableRefEditorUtility.ArrowW, rowRect.y,
-                                         rowRect.xMax - indented.x - StableRefEditorUtility.ArrowW, rowRect.height);
-                if (labelRect.Contains(ev.mousePosition))
-                {
-                    if (selectable) _selectedNode = node;
-                    if (node.PingTarget != null)
-                        EditorGUIUtility.PingObject(ResolvePingTarget(node));
-                    if (ev.clickCount == 2)
-                        newExpanded = !newExpanded;
-                    Repaint();
-                }
-            }
-
-            if (newExpanded != expanded && altHeld)
-                SetExpandedRecursive(node, newExpanded);
-
-            return newExpanded;
-        }
-
-        private void DrawLeaf(Node node)
-        {
-            var fullRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.label,
-                GUILayout.Height(EditorGUIUtility.singleLineHeight));
-
-            bool isSelected = _selectedNode == node;
-            if (isSelected && Event.current.type == EventType.Repaint)
-                EditorGUI.DrawRect(new Rect(0, fullRect.y, position.width, fullRect.height), StableRefEditorUtility.SelectionColor);
-
-            var rect = EditorGUI.IndentedRect(fullRect);
-            var ev = Event.current;
-
-            if (node.ConcreteType != null && ev.type == EventType.MouseDown && rect.Contains(ev.mousePosition))
-            {
-                _selectedNode = node;
-                StableRefEditorUtility.PingScript(node.ConcreteType);
-                Repaint();
-                ev.Use();
+                if (clickCount == 2 && StableRefEditorUtility.FindScript(node.ConcreteType) is { } script)
+                    AssetDatabase.OpenAsset(script);
+                else
+                    StableRefEditorUtility.PingScript(node.ConcreteType);
                 return;
             }
 
-            var prevContent = GUI.contentColor;
-            if (isSelected) GUI.contentColor = StableRefEditorUtility.SelectionTextColor;
-            GUI.Label(rect, new GUIContent(" " + node.Label, node.Icon));
-            GUI.contentColor = prevContent;
-        }
-
-        private static void SetExpandedRecursive(Node node, bool expanded)
-        {
-            node.Expanded = expanded;
-            foreach (var c in node.Children)
-                SetExpandedRecursive(c, expanded);
+            if (node.PingTarget != null)
+                EditorGUIUtility.PingObject(ResolvePingTarget(node));
         }
 
         private void RunSearch()
         {
-            _roots = new List<Node>();
-
-            var prefabGroup = new Node { Kind = NodeKind.Group, Label = "Prefabs" };
-            var sceneGroup = new Node { Kind = NodeKind.Group, Label = "Active Scenes" };
-            var soGroup = new Node { Kind = NodeKind.Group, Label = "Scriptable Objects" };
+            var prefabGroup = new Node { Kind = NodeKind.Group, Label = "Prefabs", Expanded = true };
+            var sceneGroup = new Node { Kind = NodeKind.Group, Label = "Active Scenes", Expanded = true };
+            var soGroup = new Node { Kind = NodeKind.Group, Label = "Scriptable Objects", Expanded = true };
 
             try
             {
@@ -354,34 +191,54 @@ namespace SST.StableRef
             }
             finally { EditorUtility.ClearProgressBar(); }
 
-            _roots.Add(prefabGroup);
-            _roots.Add(sceneGroup);
-            _roots.Add(soGroup);
+            _roots = new List<StableRefResultTree.Node> { prefabGroup, sceneGroup, soGroup };
+            _tree.SetRoots(_roots);
+            var roots = _roots;
+            EditorApplication.delayCall += () => WarmUpSearchIndex(roots, new HashSet<System.Reflection.Assembly>());
 
             EditorUtility.UnloadUnusedAssetsImmediate();
-
-            InvalidateVisibility();
             Repaint();
+        }
+
+        /// <summary>Starts building the declaration index of every assembly a found value comes from.</summary>
+        private static void WarmUpSearchIndex(List<StableRefResultTree.Node> nodes, HashSet<System.Reflection.Assembly> seen)
+        {
+            foreach (var n in nodes)
+            {
+                var type = ((Node)n).ConcreteType;
+                if (type != null && seen.Add(type.Assembly))
+                    StableRefEditorUtility.TryGetDeclaringFileName(type, out _);
+                WarmUpSearchIndex(n.Children, seen);
+            }
+        }
+
+        /// <summary>Asset paths under <c>Assets/</c> matching <paramref name="filter"/> that may hold StableRef entries.</summary>
+        private static List<string> FindCandidates(string filter, string what, float progress)
+        {
+            var paths = AssetDatabase.FindAssets(filter, new[] { "Assets" })
+                .Select(AssetDatabase.GUIDToAssetPath)
+                .ToList();
+            EditorUtility.DisplayProgressBar(ProgressTitle, $"Looking for StableRef data in {what}…", progress);
+            return StableRefEditorUtility.FilterScanPaths(paths);
         }
 
         private static void ScanPrefabs(Node group)
         {
-            var guids = AssetDatabase.FindAssets("t:Prefab", new[] { "Assets" });
-            for (int i = 0; i < guids.Length; i++)
+            var paths = FindCandidates("t:Prefab", "prefabs", 0f);
+            for (int i = 0; i < paths.Count; i++)
             {
-                if (EditorUtility.DisplayCancelableProgressBar("StableRef Usages",
-                        $"Prefabs ({i + 1} / {guids.Length})", 0.7f * i / guids.Length))
+                if (EditorUtility.DisplayCancelableProgressBar(ProgressTitle,
+                        $"Prefabs ({i + 1} / {paths.Count})", 0.7f * i / paths.Count))
                     break;
 
-                var path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                var path = paths[i];
                 var go = AssetDatabase.LoadAssetAtPath<GameObject>(path);
                 if (go == null) continue;
 
                 var assetNode = new Node
                 {
                     Kind = NodeKind.Asset, Label = go.name,
-                    Icon = AssetDatabase.GetCachedIcon(path), PingTarget = go,
-                    Expanded = true
+                    Icon = AssetDatabase.GetCachedIcon(path), PingTarget = go
                 };
                 ScanGameObjectTree(go, assetNode, go);
                 if (assetNode.Children.Count > 0) group.Children.Add(assetNode);
@@ -418,26 +275,27 @@ namespace SST.StableRef
 
         private static void ScanScriptableObjects(Node group)
         {
-            var guids = AssetDatabase.FindAssets("t:ScriptableObject", new[] { "Assets" });
-            for (int i = 0; i < guids.Length; i++)
+            var paths = FindCandidates("t:ScriptableObject", "scriptable objects", 0.7f);
+            for (int i = 0; i < paths.Count; i++)
             {
-                if (EditorUtility.DisplayCancelableProgressBar("StableRef Usages",
-                        $"Scriptable Objects ({i + 1} / {guids.Length})",
-                        0.8f + 0.2f * i / guids.Length))
+                if (EditorUtility.DisplayCancelableProgressBar(ProgressTitle,
+                        $"Scriptable Objects ({i + 1} / {paths.Count})",
+                        0.8f + 0.2f * i / paths.Count))
                     break;
 
-                var path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                var path = paths[i];
                 if (!path.StartsWith("Assets/")) continue;
 
                 Node assetNode = null;
                 foreach (var target in StableRefEditorUtility.LoadScanTargets(path))
                 {
                     if (target is not ScriptableObject so) continue;
+                    if (!StableRefPropertyUtils.MayContainStableRef(so.GetType())) continue;
 
                     var compNode = new Node
                     {
                         Kind = NodeKind.Component, Label = StableRefEditorUtility.ScanTargetLabel(so),
-                        Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
+                        Icon = ScriptIcon,
                         PingTarget = so
                     };
                     ScanSerializedObject(new SerializedObject(so), compNode, so);
@@ -454,6 +312,8 @@ namespace SST.StableRef
                 if (assetNode != null) group.Children.Add(assetNode);
             }
         }
+
+        private static Texture ScriptIcon => StableRefEditorUtility.Icon("cs Script Icon").image;
 
         private static void ScanGameObjectTree(
             GameObject go, Node parentNode, GameObject prefabRoot, string parentPath = "",
@@ -475,23 +335,22 @@ namespace SST.StableRef
                     Icon = StableRefEditorUtility.GoIcon,
                     PingTarget = pingOverride ?? go,
                     PrefabAssetPath = prefabPath,
-                    TransformPath = transformPath,
-                    Expanded = true
+                    TransformPath = transformPath
                 };
             }
 
             foreach (var comp in go.GetComponents<Component>())
             {
-                if (comp == null) continue;
+                if (comp is not MonoBehaviour || !StableRefPropertyUtils.MayContainStableRef(comp.GetType())) continue;
+
                 var compNode = new Node
                 {
                     Kind = NodeKind.Component,
                     Label = comp.GetType().Name,
-                    Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
+                    Icon = ScriptIcon,
                     PingTarget = pingOverride ?? comp,
                     PrefabAssetPath = prefabPath,
-                    TransformPath = transformPath,
-                    Expanded = true
+                    TransformPath = transformPath
                 };
                 ScanSerializedObject(new SerializedObject(comp), compNode, pingOverride ?? comp);
                 if (compNode.Children.Count > 0) target.Children.Add(compNode);
@@ -507,54 +366,59 @@ namespace SST.StableRef
         private static void ScanSerializedObject(SerializedObject so, Node parent, UnityEngine.Object pingTarget)
         {
             var fieldGroupNodes = new Dictionary<string, Node>();
+            var displayNames = new Dictionary<string, string>();
 
             var iter = so.GetIterator();
             bool enter = true;
             while (iter.Next(enter))
             {
-                enter = true;
-                if (iter.isArray && StableRefPropertyUtils.IsStableRefArray(iter))
+                if (iter.propertyType == SerializedPropertyType.ManagedReference)
+                {
+                    if (StableRefPropertyUtils.HasManagedValue(iter) && StableRefPropertyUtils.IsStableRefValueField(iter))
+                        AddEntryNode(so, iter, parent, pingTarget, fieldGroupNodes, displayNames);
+                    enter = false;
+                    continue;
+                }
+
+                if (iter.isArray && iter.propertyType == SerializedPropertyType.Generic
+                    && StableRefPropertyUtils.IsStableRefArray(iter))
                 {
                     string listPath = StableRefEditorUtility.StripStableRefListArraySuffix(iter.propertyPath);
-                    string label = StableRefEditorUtility.BuildFieldDisplayPath(so, listPath);
+                    string label = StableRefEditorUtility.BuildFieldDisplayPath(so, listPath, displayNames);
                     var node = BuildStableRefListNode(iter, pingTarget, label);
                     if (node != null) parent.Children.Add(node);
                     enter = false;
+                    continue;
                 }
-                else if (iter.propertyType == SerializedPropertyType.ManagedReference
-                    && StableRefPropertyUtils.IsStableRefValueField(iter)
-                    && iter.managedReferenceValue != null)
-                {
-                    var itemNode = BuildItemNode(iter, pingTarget);
-                    if (itemNode != null)
-                    {
-                        string iterPath = iter.propertyPath;
-                        int lastDot = iterPath.LastIndexOf('.');
-                        string fieldPath = lastDot > 0 ? iterPath.Substring(0, lastDot) : iterPath;
-                        string groupLabel = StableRefEditorUtility.BuildFieldDisplayPath(so, fieldPath);
 
-                        if (!string.IsNullOrEmpty(groupLabel))
-                        {
-                            if (!fieldGroupNodes.TryGetValue(groupLabel, out var groupNode))
-                            {
-                                groupNode = new Node { Kind = NodeKind.Item, Label = groupLabel, PingTarget = pingTarget, Expanded = true };
-                                fieldGroupNodes[groupLabel] = groupNode;
-                                parent.Children.Add(groupNode);
-                            }
-                            groupNode.Children.Add(itemNode);
-                        }
-                        else
-                        {
-                            parent.Children.Add(itemNode);
-                        }
-                    }
-                    enter = false;
-                }
-                else if (iter.propertyType == SerializedPropertyType.ManagedReference)
-                {
-                    enter = false;
-                }
+                enter = StableRefPropertyUtils.MayHoldEntries(iter);
             }
+        }
+
+        private static void AddEntryNode(SerializedObject so, SerializedProperty valueProp, Node parent,
+            UnityEngine.Object pingTarget, Dictionary<string, Node> fieldGroupNodes, Dictionary<string, string> displayNames)
+        {
+            var itemNode = BuildItemNode(valueProp, pingTarget);
+            if (itemNode == null) return;
+
+            string valuePath = valueProp.propertyPath;
+            int lastDot = valuePath.LastIndexOf('.');
+            string fieldPath = lastDot > 0 ? valuePath.Substring(0, lastDot) : valuePath;
+            string groupLabel = StableRefEditorUtility.BuildFieldDisplayPath(so, fieldPath, displayNames);
+
+            if (string.IsNullOrEmpty(groupLabel))
+            {
+                parent.Children.Add(itemNode);
+                return;
+            }
+
+            if (!fieldGroupNodes.TryGetValue(groupLabel, out var groupNode))
+            {
+                groupNode = new Node { Kind = NodeKind.Item, Label = groupLabel, PingTarget = pingTarget };
+                fieldGroupNodes[groupLabel] = groupNode;
+                parent.Children.Add(groupNode);
+            }
+            groupNode.Children.Add(itemNode);
         }
 
         private static Node BuildListNode(SerializedProperty arrayProp, UnityEngine.Object pingTarget, string label = null)
@@ -578,7 +442,7 @@ namespace SST.StableRef
             {
                 var elem = arrayProp.GetArrayElementAtIndex(i);
                 var valueProp = elem.FindPropertyRelative(StableRefEntry.ValueFieldName);
-                if (valueProp == null || valueProp.managedReferenceValue == null) continue;
+                if (valueProp == null) continue;
 
                 var item = BuildItemNode(valueProp, pingTarget);
                 if (item != null) node.Children.Add(item);
@@ -589,15 +453,13 @@ namespace SST.StableRef
 
         private static Node BuildItemNode(SerializedProperty prop, UnityEngine.Object pingTarget)
         {
-            var value = prop.managedReferenceValue;
-            if (value == null) return null;
+            var type = StableRefPropertyUtils.GetManagedReferenceType(prop);
+            if (type == null) return null;
 
-            var type = value.GetType();
             var node = new Node
             {
                 Kind = NodeKind.Item,
                 Label = StableRefEditorUtility.ValueLabelPrefix + GetTypeDisplayName(type),
-                Icon = GetTypeIcon(type),
                 PingTarget = pingTarget,
                 ConcreteType = type
             };
@@ -608,7 +470,7 @@ namespace SST.StableRef
             while (iter.Next(enter))
             {
                 if (SerializedProperty.EqualContents(iter, end)) break;
-                enter = true;
+
                 if (iter.isArray
                     && iter.propertyType != SerializedPropertyType.String
                     && StableRefPropertyUtils.IsManagedReferenceArray(iter))
@@ -617,7 +479,8 @@ namespace SST.StableRef
                     if (sub != null) node.Children.Add(sub);
                     enter = false;
                 }
-                else if (iter.isArray && StableRefPropertyUtils.IsStableRefArray(iter))
+                else if (iter.isArray && iter.propertyType == SerializedPropertyType.Generic
+                         && StableRefPropertyUtils.IsStableRefArray(iter))
                 {
                     var sub = BuildStableRefListNode(iter, pingTarget, StableRefListFieldLabel(iter));
                     if (sub != null) node.Children.Add(sub);
@@ -628,21 +491,19 @@ namespace SST.StableRef
                          && iter.FindPropertyRelative(StableRefEntry.ValueFieldName) is
                              { propertyType: SerializedPropertyType.ManagedReference } nestedValue)
                 {
-                    if (nestedValue.managedReferenceValue != null)
+                    var sub = BuildItemNode(nestedValue, pingTarget);
+                    if (sub != null)
                     {
                         var group = new Node { Kind = NodeKind.Item, Label = iter.displayName, PingTarget = pingTarget };
-                        var sub = BuildItemNode(nestedValue, pingTarget);
-                        if (sub != null)
-                        {
-                            group.Children.Add(sub);
-                            node.Children.Add(group);
-                        }
+                        group.Children.Add(sub);
+                        node.Children.Add(group);
                     }
                     enter = false;
                 }
-                else if (iter.propertyType == SerializedPropertyType.ManagedReference)
+                else
                 {
-                    enter = false;
+                    enter = iter.propertyType != SerializedPropertyType.ManagedReference
+                            && StableRefPropertyUtils.MayHoldEntries(iter);
                 }
             }
 
@@ -670,10 +531,10 @@ namespace SST.StableRef
             if (string.IsNullOrEmpty(node.TransformPath))
                 node.TransformPath = inheritedTransformPath;
             foreach (var child in node.Children)
-                TagScenePathRecursive(child, scenePath, node.TransformPath);
+                TagScenePathRecursive((Node)child, scenePath, node.TransformPath);
         }
 
-        private static GameObject FindInScene(UnityEngine.SceneManagement.Scene scene, string transformPath)
+        private static GameObject FindInScene(Scene scene, string transformPath)
         {
             if (string.IsNullOrEmpty(transformPath)) return null;
             int slash = transformPath.IndexOf('/');
@@ -725,17 +586,13 @@ namespace SST.StableRef
 
         private static string GetTypeDisplayName(Type type) => StableRefGenericUtils.DisplayName(type);
 
+        /// <summary>Icon of the script declaring <paramref name="type"/>; resolved when its row is first drawn.</summary>
         private static Texture GetTypeIcon(Type type)
         {
             if (_iconCache.TryGetValue(type, out var cached)) return cached;
-            foreach (var guid in AssetDatabase.FindAssets($"t:MonoScript {type.Name}"))
-            {
-                var path = AssetDatabase.GUIDToAssetPath(guid);
-                var ms = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
-                if (ms != null && ms.GetClass() == type)
-                    return _iconCache[type] = AssetDatabase.GetCachedIcon(path);
-            }
-            return _iconCache[type] = EditorGUIUtility.IconContent("cs Script Icon").image;
+            var script = StableRefEditorUtility.FindScriptByFileName(type);
+            var icon = script != null ? AssetDatabase.GetCachedIcon(AssetDatabase.GetAssetPath(script)) : null;
+            return _iconCache[type] = icon != null ? icon : ScriptIcon;
         }
     }
 }

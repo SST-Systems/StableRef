@@ -334,6 +334,343 @@ namespace SST.StableRef.Tests
                 0.001f, "never asked for a mixed field");
         }
 
+        [TestCase(typeof(GuidBackedThing), "GuidBackedThing.cs")]
+        [TestCase(typeof(FindScriptFirstSample), "FindScriptSamples.cs")]
+        [TestCase(typeof(FindScriptSecondSample), "FindScriptSamples.cs")]
+        [TestCase(typeof(FindScriptFirstSample.Nested), "FindScriptSamples.cs")]
+        [TestCase(typeof(FindScriptGeneric<>), "FindScriptGeneric.cs")]
+        [TestCase(typeof(FindScriptGeneric<int>), "FindScriptGeneric.cs")]
+        [TestCase(typeof(FindScriptGeneric<int>.Inner), "FindScriptGeneric.cs")]
+        public void FindScript_FindsDeclaringFile(Type type, string fileName)
+        {
+            var script = StableRefEditorUtility.FindScript(type);
+            Assert.IsNotNull(script, type.FullName);
+            StringAssert.EndsWith("/" + fileName, AssetDatabase.GetAssetPath(script));
+        }
+
+        [Test]
+        public void DeclaringFileName_ComesFromBackgroundIndex()
+        {
+            Assert.AreEqual("FindScriptSamples", WaitForDeclaringFileName(typeof(FindScriptFirstSample.Nested)));
+            Assert.AreEqual("FindScriptGeneric", WaitForDeclaringFileName(typeof(FindScriptGeneric<int>)));
+            Assert.IsNull(WaitForDeclaringFileName(typeof(Assert)), "no source");
+        }
+
+        private static string WaitForDeclaringFileName(Type type)
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            string name;
+            while (!StableRefEditorUtility.TryGetDeclaringFileName(type, out name))
+            {
+                Assert.Less(watch.ElapsedMilliseconds, 30000, "index never finished");
+                System.Threading.Thread.Sleep(10);
+            }
+            return name;
+        }
+
+        [Test]
+        public void SelectorDeepSearch_MatchesDeclaringFileName()
+        {
+            var window = ScriptableObject.CreateInstance<StableRefSelectorWindow>();
+            _created.Add(window);
+            WaitForDeclaringFileName(typeof(FindScriptFirstSample));
+            WaitForDeclaringFileName(typeof(BetaThing));
+
+            var matches = typeof(StableRefSelectorWindow).GetMethod("DeclaringFileMatches",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            bool Match(Type type, string query) => (bool)matches.Invoke(window, new object[] { type, query });
+
+            Assert.IsTrue(Match(typeof(FindScriptFirstSample), "scriptsamples"));
+            Assert.IsTrue(Match(typeof(FindScriptSecondSample), "findscriptsamples"));
+            Assert.IsFalse(Match(typeof(BetaThing), "scriptsamples"));
+            Assert.IsFalse(Match(typeof(Assert), "assert"), "no source");
+        }
+
+        [Test]
+        public void UsagesSearch_MatchesDeclaringScriptName()
+        {
+            var window = ScriptableObject.CreateInstance<StableRefUsagesWindow>();
+            _created.Add(window);
+            var nodeType = typeof(StableRefUsagesWindow).GetNestedType("Node", System.Reflection.BindingFlags.NonPublic);
+            var node = (StableRefResultTree.Node)Activator.CreateInstance(nodeType);
+            node.Label = "SR: FindScriptSecondSample";
+            nodeType.GetField("ConcreteType").SetValue(node, typeof(FindScriptSecondSample));
+            WaitForDeclaringFileName(typeof(FindScriptSecondSample));
+
+            string key = (string)typeof(StableRefUsagesWindow)
+                .GetMethod("GetScriptSearchName", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                .Invoke(window, new object[] { node });
+            Assert.AreEqual("findscriptsamples", key, "found by the name of the file that declares it");
+        }
+
+        [Test]
+        public void FindScript_ReturnsNullForTypeWithoutSource()
+        {
+            Assert.IsNull(StableRefEditorUtility.FindScript(typeof(Assert)));
+            Assert.IsNull(StableRefEditorUtility.FindScript(null));
+            Assert.DoesNotThrow(() => StableRefEditorUtility.PingScript(typeof(Assert)));
+        }
+
+        [Test]
+        public void FilterScanPaths_KeepsFilesWithEntriesAndPrefabsInstantiatingThem()
+        {
+            if (EditorSettings.serializationMode != SerializationMode.ForceText)
+                Assert.Ignore("The text prefilter only applies to Force Text serialization.");
+            AssetDatabase.CreateFolder("Assets", "__StableRefTestsTemp");
+
+            string holder = TempFolder + "/Holder.asset";
+            string clip = TempFolder + "/Plain.anim";
+            AssetDatabase.CreateAsset(ScriptableObject.CreateInstance<MissingHolder>(), holder);
+            AssetDatabase.CreateAsset(new AnimationClip(), clip);
+
+            // Components from this editor-only assembly can't be added to GameObjects; a child named after the entry
+            // key stands in for a StableRef entry, which is all the text check looks at (the root takes the file name).
+            var baseRoot = new GameObject("Base");
+            new GameObject("TypeDisplayName: x").transform.SetParent(baseRoot.transform);
+            string basePrefab = SavePrefab(baseRoot, "Base");
+            string plainPrefab = SavePrefab(new GameObject("Plain"), "Plain");
+            string variant = SavePrefab(InstantiatePrefab(basePrefab), "Variant");
+            string plainVariant = SavePrefab(InstantiatePrefab(plainPrefab), "PlainVariant");
+
+            var outer = new GameObject("Outer");
+            InstantiatePrefab(variant).transform.SetParent(outer.transform);
+            string nesting = SavePrefab(outer, "Nesting");
+
+            var outerPlain = new GameObject("OuterPlain");
+            InstantiatePrefab(plainPrefab).transform.SetParent(outerPlain.transform);
+            string nestingPlain = SavePrefab(outerPlain, "NestingPlain");
+
+            var kept = StableRefEditorUtility.FilterScanPaths(new[]
+                { holder, clip, basePrefab, plainPrefab, variant, plainVariant, nesting, nestingPlain });
+            CollectionAssert.AreEqual(new[] { holder, basePrefab, variant, nesting }, kept);
+        }
+
+        private static GameObject InstantiatePrefab(string prefabPath)
+            => (GameObject)PrefabUtility.InstantiatePrefab(AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath));
+
+        private static string SavePrefab(GameObject root, string name)
+        {
+            string path = $"{TempFolder}/{name}.prefab";
+            PrefabUtility.SaveAsPrefabAsset(root, path);
+            Object.DestroyImmediate(root);
+            return path;
+        }
+
+        [Test]
+        public void ManagedReferenceType_MatchesValueType()
+        {
+            var holder = NewHolder();
+            holder.Ref.Value = new MappedGeneric<List<int>>();
+            holder.Plain = new OuterOfThing.NestedThing();
+            holder.PlainList.Add(new MappedGeneric<OuterOfThing.NestedThing>());
+            holder.PlainList.Add(null);
+
+            var so = new SerializedObject(holder);
+            int checkedProps = 0;
+            var iter = so.GetIterator();
+            while (iter.Next(true))
+            {
+                if (iter.propertyType != SerializedPropertyType.ManagedReference) continue;
+                Assert.AreEqual(iter.managedReferenceValue?.GetType(), StableRefPropertyUtils.GetManagedReferenceType(iter),
+                    iter.propertyPath);
+                checkedProps++;
+            }
+            Assert.AreEqual(4, checkedProps);
+        }
+
+        private TestHolder NewPopulatedHolder()
+        {
+            var holder = NewHolder();
+            holder.Ref.Value = new AlphaThing { Ints = { 1, 2, 3 }, Inner = new StableRef<ITestThing>(new BetaThing()) };
+            holder.List.Add(new BetaThing());
+            holder.List.Add(null);
+            holder.List.Add(new OuterOfThing.NestedThing { Children = { new AlphaThing(), new MappedGeneric<int>() } });
+            holder.Plain = new AlphaThing { Inner = new StableRef<ITestThing>(new BetaThing()) };
+            holder.RawList.Add(new StableRef<ITestThing>(new BetaThing()));
+            holder.RawList.Add(new StableRef<ITestThing>());
+            holder.Arr = new[] { new StableRef<ITestThing>(), new StableRef<ITestThing>(new AlphaThing()) };
+            holder.PlainList.Add(new AlphaThing { Inner = new StableRef<ITestThing>(new BetaThing()) });
+            holder.Holders.Add(new PlainValueHolder { Value = new AlphaThing() });
+            return holder;
+        }
+
+        [Test]
+        public void CollectEntryPaths_MatchesFullTraversal()
+        {
+            var so = new SerializedObject(NewPopulatedHolder());
+
+            CollectionAssert.AreEquivalent(FullTraversalEntryPaths(so, includeEmpty: true),
+                StableRefResync.CollectEntryPaths(so, includeEmpty: true));
+            CollectionAssert.AreEquivalent(FullTraversalEntryPaths(so, includeEmpty: false),
+                StableRefResync.CollectEntryPaths(so));
+        }
+
+        /// <summary>The entry walk before 4.1: every generic property entered, values read through managedReferenceValue.</summary>
+        private static List<string> FullTraversalEntryPaths(SerializedObject so, bool includeEmpty)
+        {
+            var result = new List<string>();
+            var iter = so.GetIterator();
+            bool enter = true;
+            while (iter.Next(enter))
+            {
+                if (iter.propertyType != SerializedPropertyType.ManagedReference)
+                {
+                    enter = iter.propertyType == SerializedPropertyType.Generic;
+                    continue;
+                }
+
+                bool hasValue = iter.managedReferenceValue != null;
+                if ((hasValue || includeEmpty) && iter.name == StableRefEntry.ValueFieldName)
+                {
+                    var wrapper = StableRefEntry.FindWrapperOfValue(so, iter.propertyPath);
+                    if (wrapper != null) result.Add(wrapper.propertyPath);
+                }
+                enter = hasValue;
+            }
+            return result;
+        }
+
+        [Test]
+        public void UsagesScan_MatchesFullTraversal()
+        {
+            var holder = NewPopulatedHolder();
+            var so = new SerializedObject(holder);
+
+            var nodeType = typeof(StableRefUsagesWindow).GetNestedType("Node", System.Reflection.BindingFlags.NonPublic);
+            var root = (StableRefResultTree.Node)Activator.CreateInstance(nodeType);
+            typeof(StableRefUsagesWindow)
+                .GetMethod("ScanSerializedObject", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
+                .Invoke(null, new object[] { so, root, holder });
+
+            var actual = new List<string>();
+            FlattenTree(root, "", actual);
+            var expected = FullTraversalUsages(so);
+
+            Assert.Greater(expected.Count, 10);
+            CollectionAssert.AreEquivalent(expected, actual);
+        }
+
+        private static void FlattenTree(StableRefResultTree.Node node, string path, List<string> rows)
+        {
+            foreach (var child in node.Children)
+            {
+                string childPath = path + " > " + child.Label;
+                rows.Add(childPath);
+                FlattenTree(child, childPath, rows);
+            }
+        }
+
+        /// <summary>
+        /// Rows of the Find Usages tree as the scan before 4.1 built them (every property entered, values read through
+        /// managedReferenceValue), each as the path of labels from the scanned object.
+        /// </summary>
+        private static List<string> FullTraversalUsages(SerializedObject so)
+        {
+            var rows = new List<string>();
+            var groups = new HashSet<string>();
+            var iter = so.GetIterator();
+            bool enter = true;
+            while (iter.Next(enter))
+            {
+                enter = true;
+                if (iter.isArray && StableRefPropertyUtils.IsStableRefArray(iter))
+                {
+                    string label = StableRefEditorUtility.BuildFieldDisplayPath(so,
+                        StableRefEditorUtility.StripStableRefListArraySuffix(iter.propertyPath));
+                    FullTraversalList(iter, label, "", rows, stable: true);
+                    enter = false;
+                }
+                else if (iter.propertyType == SerializedPropertyType.ManagedReference
+                         && StableRefPropertyUtils.IsStableRefValueField(iter)
+                         && iter.managedReferenceValue != null)
+                {
+                    string valuePath = iter.propertyPath;
+                    int lastDot = valuePath.LastIndexOf('.');
+                    string fieldPath = lastDot > 0 ? valuePath.Substring(0, lastDot) : valuePath;
+                    string groupLabel = StableRefEditorUtility.BuildFieldDisplayPath(so, fieldPath);
+                    string parent = "";
+                    if (!string.IsNullOrEmpty(groupLabel))
+                    {
+                        parent = " > " + groupLabel;
+                        if (groups.Add(parent)) rows.Add(parent);
+                    }
+                    FullTraversalItem(iter, parent, rows);
+                    enter = false;
+                }
+                else if (iter.propertyType == SerializedPropertyType.ManagedReference)
+                {
+                    enter = false;
+                }
+            }
+            return rows;
+        }
+
+        private static void FullTraversalItem(SerializedProperty prop, string parent, List<string> rows)
+        {
+            var value = prop.managedReferenceValue;
+            if (value == null) return;
+
+            string path = parent + " > " + StableRefEditorUtility.ValueLabelPrefix + StableRefGenericUtils.DisplayName(value.GetType());
+            rows.Add(path);
+
+            var iter = prop.Copy();
+            var end = prop.GetEndProperty();
+            bool enter = true;
+            while (iter.Next(enter))
+            {
+                if (SerializedProperty.EqualContents(iter, end)) break;
+                enter = true;
+                if (iter.isArray && iter.propertyType != SerializedPropertyType.String
+                    && StableRefPropertyUtils.IsManagedReferenceArray(iter))
+                {
+                    FullTraversalList(iter, null, path, rows, stable: false);
+                    enter = false;
+                }
+                else if (iter.isArray && StableRefPropertyUtils.IsStableRefArray(iter))
+                {
+                    string label = null;
+                    if (iter.propertyPath.EndsWith("._items", StringComparison.Ordinal))
+                        label = iter.serializedObject.FindProperty(iter.propertyPath.Substring(0, iter.propertyPath.Length - 7))?.displayName;
+                    FullTraversalList(iter, label, path, rows, stable: true);
+                    enter = false;
+                }
+                else if (iter.propertyType == SerializedPropertyType.Generic
+                         && iter.FindPropertyRelative(StableRefEntry.TypeIdFieldName) != null
+                         && iter.FindPropertyRelative(StableRefEntry.ValueFieldName) is
+                             { propertyType: SerializedPropertyType.ManagedReference } nested)
+                {
+                    if (nested.managedReferenceValue != null)
+                    {
+                        string group = path + " > " + iter.displayName;
+                        rows.Add(group);
+                        FullTraversalItem(nested, group, rows);
+                    }
+                    enter = false;
+                }
+                else if (iter.propertyType == SerializedPropertyType.ManagedReference)
+                {
+                    enter = false;
+                }
+            }
+        }
+
+        private static void FullTraversalList(SerializedProperty array, string label, string parent, List<string> rows,
+            bool stable)
+        {
+            string path = parent + " > " + (label ?? array.displayName);
+            var items = new List<string>();
+            for (int i = 0; i < array.arraySize; i++)
+            {
+                var elem = array.GetArrayElementAtIndex(i);
+                var valueProp = stable ? elem.FindPropertyRelative(StableRefEntry.ValueFieldName) : elem;
+                if (valueProp == null) continue;
+                FullTraversalItem(valueProp, path, items);
+            }
+            if (items.Count == 0) return;
+            rows.Add(path);
+            rows.AddRange(items);
+        }
+
         private sealed class FixedHeightDrawer : IStableRefChildrenDrawer
         {
             public float GetChildrenHeight(SerializedProperty valueProperty) => 100f;
