@@ -113,8 +113,11 @@ namespace SST.StableRef
 
                     int fixedCount = StableRefMissingTypesWindow.FixTarget(target, out int unresolved, wrapperPath);
                     unresolvedTotal += unresolved;
-                    if (fixedCount > 0 && !string.IsNullOrEmpty(AssetDatabase.GetAssetPath(target)))
-                        AssetDatabase.SaveAssetIfDirty(target);
+                    if (fixedCount > 0 && !string.IsNullOrEmpty(AssetDatabase.GetAssetPath(target))
+                        && !StableRefEditorUtility.TrySaveAsset(target))
+                        Debug.LogWarning(
+                            $"[StableRef] Unity didn't save '{AssetDatabase.GetAssetPath(target)}', so the recovered entry " +
+                            "was not written — a prefab with a missing script can't be saved.", target);
                 }
 
                 StableRefMultiEdit.Invalidate();
