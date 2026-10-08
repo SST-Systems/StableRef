@@ -503,12 +503,42 @@ namespace SST.StableRef
         }
 
         private static readonly byte[] EntryMarker = Encoding.ASCII.GetBytes("TypeDisplayName:");
+        // A StableRefList always writes its items key, even while empty — a variant or prefab instance can then add
+        // elements through overrides that carry no entry metadata of their own.
+        private static readonly byte[] ListItemsKey = Encoding.ASCII.GetBytes(StableRefEntry.ListItemsFieldName + ":");
+        private static readonly byte[] ListItemsOverride = Encoding.ASCII.GetBytes("." + StableRefEntry.ListItemsFieldName + ".Array.");
         private static readonly byte[] YamlHeader = Encoding.ASCII.GetBytes("%YAML");
         private static readonly byte[] UnityYamlTag = Encoding.ASCII.GetBytes("tag:unity3d.com");
         private static readonly byte[] SourcePrefabKey = Encoding.ASCII.GetBytes("m_SourcePrefab: {");
         private static readonly byte[] GuidKey = Encoding.ASCII.GetBytes("guid: ");
         private const int GuidLength = 32;
         private const int HeaderLength = 256;
+
+        /// <summary>
+        /// Saves the asset file of <paramref name="target"/> if it has unsaved changes and tells whether they reached the
+        /// disk. A prefab with a missing script is not saved at all: Unity refuses it without throwing — it only logs an
+        /// error and reimports the file, so the object isn't even left dirty — hence the check up front.
+        /// </summary>
+        internal static bool TrySaveAsset(UnityEngine.Object target)
+        {
+            if (target == null) return false;
+            var root = target is Component component ? component.transform.root.gameObject : target as GameObject;
+            if (root != null && HasMissingScripts(root)) return false;
+
+            AssetDatabase.SaveAssetIfDirty(target);
+            return !EditorUtility.IsDirty(target);
+        }
+
+        private static bool HasMissingScripts(GameObject root)
+        {
+            foreach (var t in root.GetComponentsInChildren<Transform>(true))
+                if (GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(t.gameObject) > 0)
+                    return true;
+            return false;
+        }
+
+        /// <summary>Whether the scan prefilter keeps the file at <paramref name="physicalPath"/> on its own content.</summary>
+        internal static bool FileMayHoldEntries(string physicalPath) => CheckFile(physicalPath).MayHold;
 
         private struct FileCheck
         {
@@ -521,8 +551,10 @@ namespace SST.StableRef
         /// <summary>
         /// The asset files among <paramref name="paths"/> that may hold StableRef entries, in their order — checked as
         /// text before anything is loaded. A text-serialized file is kept when it contains an entry's
-        /// <c>TypeDisplayName</c> key (every entry writes it, empty or not) or instantiates a prefab that is kept (an
-        /// unmodified variant or nested prefab shows its source's entries); binary or unreadable files are always kept.
+        /// <c>TypeDisplayName</c> key (every entry writes it, empty or not), a StableRefList's items key (written even
+        /// while the list is empty) or an override of list items, or instantiates a prefab that is kept (an unmodified
+        /// variant or nested prefab shows its source's entries — also elements its overrides add to a list that is empty
+        /// in the source); binary or unreadable files are always kept.
         /// Files are read in parallel without touching the Unity API.
         /// </summary>
         internal static List<string> FilterScanPaths(IReadOnlyList<string> paths)
@@ -583,7 +615,9 @@ namespace SST.StableRef
             int header = Math.Min(bytes.Length, HeaderLength);
             if (IndexOf(bytes, YamlHeader, 0, header) != 0 || IndexOf(bytes, UnityYamlTag, 0, header) < 0)
                 return new FileCheck { MayHold = true };
-            if (IndexOf(bytes, EntryMarker, 0, bytes.Length) >= 0)
+            if (IndexOf(bytes, EntryMarker, 0, bytes.Length) >= 0
+                || IndexOf(bytes, ListItemsKey, 0, bytes.Length) >= 0
+                || IndexOf(bytes, ListItemsOverride, 0, bytes.Length) >= 0)
                 return new FileCheck { MayHold = true };
 
             List<string> sources = null;

@@ -512,7 +512,7 @@ namespace SST.StableRef
             int fixedCount = 0;
             int unresolvedCount = 0;
             var fixedPaths = new HashSet<string>();
-            var fixedAssets = new List<UnityEngine.Object>();
+            var fixedAssets = new List<(UnityEngine.Object Asset, string Path, int Count)>();
 
             var assetEntries = entries.Where(n => !n.IsSceneObject).ToList();
             try
@@ -533,14 +533,19 @@ namespace SST.StableRef
                     if (fixedHere > 0)
                     {
                         fixedPaths.Add(node.AssetPath);
-                        fixedAssets.Add(target);
+                        fixedAssets.Add((target, node.AssetPath, fixedHere));
                     }
                 }
             }
             finally { EditorUtility.ClearProgressBar(); }
 
-            foreach (var asset in fixedAssets)
-                AssetDatabase.SaveAssetIfDirty(asset);
+            var unsavedAssets = new List<string>();
+            foreach (var (asset, path, count) in fixedAssets)
+            {
+                if (StableRefEditorUtility.TrySaveAsset(asset)) continue;
+                fixedCount -= count;
+                if (!unsavedAssets.Contains(path)) unsavedAssets.Add(path);
+            }
 
             var byScene = entries.Where(n => n.IsSceneObject).GroupBy(n => n.AssetPath).ToList();
             int skippedScenes = 0;
@@ -585,6 +590,13 @@ namespace SST.StableRef
 
             Debug.Log($"[StableRef] Fixed {fixedCount} missing reference{(fixedCount != 1 ? "s" : "")}. " +
                       "Fixed scenes are marked dirty — save them to keep the changes.");
+
+            if (unsavedAssets.Count > 0)
+            {
+                Debug.LogWarning(
+                    "[StableRef] Unity didn't save these assets, so their fixes were not written — a prefab with a missing " +
+                    "script can't be saved; fix the asset and run Fix All again:\n" + string.Join("\n", unsavedAssets));
+            }
 
             if (unresolvedCount > 0)
             {

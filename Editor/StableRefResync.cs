@@ -17,7 +17,8 @@ namespace SST.StableRef
     /// <remarks>
     /// <b>Tools/StableRef/Resync All</b> covers ScriptableObjects and prefabs under <c>Assets/</c> and the scenes that
     /// are already open. Values themselves are never changed, and missing entries are left alone (Fix Missing Types
-    /// handles them). Changed assets are saved one by one; changed scenes are marked dirty, not saved. In prefab
+    /// handles them). Changed assets are saved one by one — those Unity refuses to save are reported in
+    /// <see cref="Report.UnsavedAssets"/>; changed scenes are marked dirty, not saved. In prefab
     /// instances and variants only entries whose value is overridden are touched — inherited ones are resynced in
     /// their source prefab — so no override is created for metadata alone.
     /// </remarks>
@@ -32,6 +33,11 @@ namespace SST.StableRef
             public int UpdatedObjects;
             /// <summary>Value types without a stable id — their entries can't be protected until they get one.</summary>
             public HashSet<Type> TypesWithoutId;
+            /// <summary>
+            /// Assets whose entries were resynced but that Unity didn't save (a prefab with a missing script can't be
+            /// saved). Their entries are not counted as updated and stay out of sync until the asset can be saved.
+            /// </summary>
+            public List<string> UnsavedAssets;
         }
 
         [MenuItem("Tools/StableRef/Resync All", priority = 301)]
@@ -55,6 +61,13 @@ namespace SST.StableRef
                     "[RefTypeId] (or [assembly: RefTypeIdFor]) and run Resync All again:\n" +
                     string.Join("\n", report.TypesWithoutId.Select(t => t.FullName).OrderBy(n => n, StringComparer.Ordinal)));
             }
+            if (report.UnsavedAssets.Count > 0)
+            {
+                Debug.LogWarning(
+                    "[StableRef] Resync: Unity didn't save these assets, so their entries stay out of sync — a prefab with a " +
+                    "missing script can't be saved; fix the asset and run Resync All again:\n" +
+                    string.Join("\n", report.UnsavedAssets));
+            }
         }
 
         /// <summary>
@@ -66,13 +79,23 @@ namespace SST.StableRef
             var report = NewReport();
             StableRefEditorUtility.ScanProject("Resyncing StableRef entries…", source =>
             {
+                int entriesBefore = report.UpdatedEntries;
+                int objectsBefore = report.UpdatedObjects;
                 UnityEngine.Object changed = null;
                 foreach (var target in source.Targets)
                     if (ResyncInto(target, ref report)) changed = target;
                 if (changed == null) return;
 
-                if (source.IsScene) EditorSceneManager.MarkSceneDirty(source.Scene);
-                else AssetDatabase.SaveAssetIfDirty(changed);
+                if (source.IsScene)
+                {
+                    EditorSceneManager.MarkSceneDirty(source.Scene);
+                }
+                else if (!StableRefEditorUtility.TrySaveAsset(changed))
+                {
+                    report.UpdatedEntries = entriesBefore;
+                    report.UpdatedObjects = objectsBefore;
+                    report.UnsavedAssets.Add(source.Path);
+                }
             });
 
             EditorUtility.UnloadUnusedAssetsImmediate();
@@ -91,7 +114,7 @@ namespace SST.StableRef
             return report.UpdatedEntries;
         }
 
-        private static Report NewReport() => new() { TypesWithoutId = new HashSet<Type>() };
+        private static Report NewReport() => new() { TypesWithoutId = new HashSet<Type>(), UnsavedAssets = new List<string>() };
 
         private static bool ResyncInto(UnityEngine.Object target, ref Report report)
         {
