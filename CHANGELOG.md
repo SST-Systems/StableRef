@@ -24,6 +24,7 @@
   Results are the same as before.
 - **Find Usages and Fix Missing Types draw only the visible rows.** Every repaint walked and laid out the whole expanded tree, so scrolling stuttered with tens of thousands of results. Rows now have a fixed height and only those in view are drawn. Only the top groups are expanded after a scan, the keyboard works as in the Hierarchy (arrows, Home / End, PageUp / PageDown, Enter), and the search also matches asset, object and field names: a match is shown with everything under it, and the path to it is expanded while the search is active. The search runs once typing pauses for a moment, not on every keystroke, and re-matching tens of thousands of rows allocates nothing. Double-clicking a value in Find Usages opens its script.
 - **Removed `StableRefEditorUtility.FoldoutStyle`, `HeaderStyle`, `EnsureStyles` and `OverrideTextColors`.** They only styled the old foldout trees of the tool windows, nothing in StableRef uses them any more, and they hold no StableRef logic. Code that used them can make the same styles itself: `new GUIStyle(EditorStyles.foldout)` / `new GUIStyle(EditorStyles.foldoutHeader)`, with `normal.textColor` copied to the `onNormal`, `focused`, `onFocused`, `active` and `onActive` states.
+
 ## 4.0.1 - 07.10.2026
 
 ### Changed
