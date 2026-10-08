@@ -16,6 +16,7 @@ namespace SST.StableRef
         private const string PrefW = "StableRefSelectorWindow_W";
         private const string PrefH = "StableRefSelectorWindow_H";
         private const string PrefShowCategory = "StableRefSelectorWindow_ShowCategory";
+        private const string PrefDeepSearch = "StableRefSelectorWindow_DeepSearch";
 
         private const float DefW = 280f;
         private const float DefH = 350f;
@@ -40,6 +41,20 @@ namespace SST.StableRef
             get => EditorPrefs.GetBool(PrefShowCategory, true);
             set => EditorPrefs.SetBool(PrefShowCategory, value);
         }
+
+        /// <summary>
+        /// Deep search: the search also matches the name of the script file that declares each type, so a file holding
+        /// several classes (or a class named unlike its file) is found by the file name. Off by default — it needs the
+        /// declaration index of the types' assemblies, built in the background on first use.
+        /// </summary>
+        public static bool DeepSearch
+        {
+            get => EditorPrefs.GetBool(PrefDeepSearch, false);
+            set => EditorPrefs.SetBool(PrefDeepSearch, value);
+        }
+
+        /// <summary>A type whose declaration index was still being built when the rows were last filtered.</summary>
+        private Type _pendingDeepType;
 
         private UnityEngine.Object[] _targets;
         private string _valuePath;
@@ -131,6 +146,7 @@ namespace SST.StableRef
         private void Open(Rect btnRect, StableRefPropertyUtils.TypeEntry[] entries)
         {
             _entries = entries;
+            WarmUpDeepSearch();
             RebuildRows();
             SelectCurrentOrNone();
 
@@ -617,6 +633,50 @@ namespace SST.StableRef
             }
         }
 
+        private bool DeclaringFileMatches(Type type, string query)
+        {
+            if (!StableRefEditorUtility.TryGetDeclaringFileSearchName(type, out var file))
+            {
+                _pendingDeepType ??= type;
+                return false;
+            }
+            return file != null && file.Contains(query);
+        }
+
+        /// <summary>Starts the declaration index of every assembly offered here, so it's ready by the first keystroke.</summary>
+        private void WarmUpDeepSearch()
+        {
+            if (!DeepSearch || _entries == null) return;
+            var seen = new HashSet<System.Reflection.Assembly>();
+            foreach (var e in _entries)
+                if (seen.Add(e.Type.Assembly))
+                    StableRefEditorUtility.TryGetDeclaringFileName(e.Type, out _);
+        }
+
+        /// <summary>Called when <see cref="DeepSearch"/> is switched in the settings popup.</summary>
+        internal void OnDeepSearchChanged()
+        {
+            WarmUpDeepSearch();
+            RefreshSearch();
+        }
+
+        private void Update()
+        {
+            if (_pendingDeepType == null || !StableRefEditorUtility.TryGetDeclaringFileName(_pendingDeepType, out _)) return;
+            _pendingDeepType = null;
+            RefreshSearch();
+        }
+
+        /// <summary>Filters the rows again, keeping the selection when it is still listed.</summary>
+        private void RefreshSearch()
+        {
+            if (string.IsNullOrWhiteSpace(_search)) return;
+            var prev = SelectedRow;
+            RebuildRows();
+            if (!RestoreSelection(prev)) SelectFirstMatch();
+            Repaint();
+        }
+
         private void RebuildRows()
         {
             _rows.Clear();
@@ -627,8 +687,10 @@ namespace SST.StableRef
             if (!string.IsNullOrWhiteSpace(_search))
             {
                 string q = _search.ToLowerInvariant();
+                bool deep = DeepSearch;
+                _pendingDeepType = null;
                 foreach (var e in _entries)
-                    if (e.SearchText.Contains(q))
+                    if (e.SearchText.Contains(q) || (deep && DeclaringFileMatches(e.Type, q)))
                         _rows.Add(new RowItem { Entry = e, Label = e.Name });
             }
             else

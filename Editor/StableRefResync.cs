@@ -139,7 +139,7 @@ namespace SST.StableRef
             {
                 if (iter.propertyType == SerializedPropertyType.ManagedReference)
                 {
-                    bool hasValue = iter.managedReferenceValue != null;
+                    bool hasValue = StableRefPropertyUtils.HasManagedValue(iter);
                     if ((hasValue || includeEmpty) && iter.name == StableRefEntry.ValueFieldName)
                     {
                         var wrapper = StableRefEntry.FindWrapperOfValue(so, iter.propertyPath);
@@ -149,7 +149,7 @@ namespace SST.StableRef
                     continue;
                 }
 
-                enter = iter.propertyType == SerializedPropertyType.Generic;
+                enter = StableRefPropertyUtils.MayHoldEntries(iter);
             }
 
             result.Sort((a, b) => Depth(b).CompareTo(Depth(a)));

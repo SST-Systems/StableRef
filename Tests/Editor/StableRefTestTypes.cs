@@ -97,6 +97,16 @@ namespace SST.StableRef.Tests
     [RefTypeId("stableref-tests.meta")]
     public class MetaThing : ITestThing { }
 
+    public static class OuterOfThing
+    {
+        [Serializable]
+        [RefTypeId("stableref-tests.nested")]
+        public class NestedThing : ITestThing
+        {
+            public StableRefList<ITestThing> Children = new();
+        }
+    }
+
     public class TestMetadataProvider : IRefTypeMetadataProvider
     {
         public int Order => 0;

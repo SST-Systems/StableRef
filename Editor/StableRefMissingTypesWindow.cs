@@ -6,6 +6,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using NodeKind = SST.StableRef.StableRefResultTree.NodeKind;
 
 namespace SST.StableRef
 {
@@ -28,31 +29,22 @@ namespace SST.StableRef
         private const float SearchW = 160f;
         private const float ClearBtnW = 18f;
 
-        private enum NodeKind { Group, Asset, GameObject, Component, Item }
-
-        private sealed class Node
+        private sealed class Node : StableRefResultTree.Node
         {
-            public NodeKind Kind;
-            public string Label;
-            public Texture Icon;
-            public bool Expanded = true;
-
-            public UnityEngine.Object PingTarget;
             public GlobalObjectId ObjectId;
             public string AssetPath;
             public bool IsSceneObject;
-
-            public readonly List<Node> Children = new();
         }
 
-        private List<Node> _roots;
-        private Vector2 _scroll;
+        private List<StableRefResultTree.Node> _roots;
+        private StableRefResultTree _tree;
         private string _filter = "";
-        private Node _selectedNode;
         private bool _hasScanned;
         private bool _showDomainReloadHint;
 
         private bool HasAnyResults => _roots != null && _roots.Any(r => r.Children.Count > 0);
+
+        private static Texture ScriptIcon => StableRefEditorUtility.Icon("cs Script Icon").image;
 
         private void OnEnable()
         {
@@ -61,12 +53,23 @@ namespace SST.StableRef
             _hasScanned = false;
             _showDomainReloadHint = false;
             _filter = "";
-            _selectedNode = null;
+            _tree = new StableRefResultTree
+            {
+                Clicked = (node, _) =>
+                {
+                    if (node.PingTarget != null) EditorGUIUtility.PingObject(node.PingTarget);
+                },
+                EmptyGroupText = "No missing types found"
+            };
+        }
+
+        private void Update()
+        {
+            if (_tree.ApplyTypedFilter()) Repaint();
         }
 
         private void OnGUI()
         {
-            StableRefEditorUtility.EnsureStyles();
             DrawToolbar();
 
             if (!_hasScanned || _roots == null)
@@ -77,13 +80,9 @@ namespace SST.StableRef
                 return;
             }
 
-            _scroll = GUILayout.BeginScrollView(_scroll);
-            EditorGUI.indentLevel = 0;
-            EditorGUIUtility.SetIconSize(new Vector2(16, 16));
-            foreach (var root in _roots)
-                if (MatchesFilter(root)) DrawNode(root, 0);
-            EditorGUIUtility.SetIconSize(Vector2.zero);
-            GUILayout.EndScrollView();
+            var rect = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none,
+                GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+            _tree.OnGUI(rect);
 
             if (!HasAnyResults) DrawTips();
 
@@ -97,12 +96,17 @@ namespace SST.StableRef
                 EditorGUI.BeginChangeCheck();
                 _filter = GUILayout.TextField(_filter, EditorStyles.toolbarSearchField,
                     GUILayout.Width(SearchW));
-                if (EditorGUI.EndChangeCheck()) Repaint();
+                if (EditorGUI.EndChangeCheck())
+                {
+                    _tree.SetFilterDelayed(_filter);
+                    Repaint();
+                }
 
                 if (!string.IsNullOrEmpty(_filter) &&
                     GUILayout.Button("✕", EditorStyles.toolbarButton, GUILayout.Width(ClearBtnW)))
                 {
                     _filter = "";
+                    _tree.Filter = "";
                     GUI.FocusControl(null);
                     Repaint();
                 }
@@ -114,198 +118,8 @@ namespace SST.StableRef
             }
         }
 
-        private void DrawNode(Node node, int depth)
-        {
-            switch (node.Kind)
-            {
-                case NodeKind.Group:
-                    EditorGUI.indentLevel = 0;
-                    node.Expanded = DrawFoldout(node, node.Expanded, node.Label, null, StableRefEditorUtility.HeaderStyle);
-                    if (node.Expanded)
-                    {
-                        bool anyChildVisible = node.Children.Any(MatchesFilter);
-                        if (anyChildVisible)
-                        {
-                            DrawChildren(node.Children, depth + 1);
-                        }
-                        else
-                        {
-                            EditorGUI.indentLevel = 1;
-                            using (new EditorGUI.DisabledScope(true))
-                                EditorGUILayout.LabelField(node.Children.Count == 0 ? "No missing types found" : "No matches");
-                        }
-                    }
-                    break;
-
-                case NodeKind.Asset:
-                    EditorGUI.indentLevel = 1;
-                    node.Expanded = DrawFoldout(node, node.Expanded, node.Label, node.Icon);
-                    if (node.Expanded) DrawChildren(node.Children, 0);
-                    break;
-
-                case NodeKind.GameObject:
-                    EditorGUI.indentLevel = 2 + depth;
-                    node.Expanded = DrawFoldout(node, node.Expanded, node.Label, node.Icon);
-                    if (node.Expanded) DrawChildren(node.Children, depth + 1);
-                    break;
-
-                case NodeKind.Component:
-                    EditorGUI.indentLevel = 2 + depth;
-                    if (node.Children.Count > 0)
-                    {
-                        node.Expanded = DrawFoldout(node, node.Expanded, node.Label, node.Icon);
-                        if (node.Expanded) DrawChildren(node.Children, depth);
-                    }
-                    else
-                    {
-                        DrawLeaf(node);
-                    }
-                    break;
-
-                case NodeKind.Item:
-                    EditorGUI.indentLevel = 3 + depth;
-                    if (node.Children.Count > 0)
-                    {
-                        var prevColor = GUI.color;
-                        if (node.Icon == null) GUI.color = new Color(1f, 1f, 1f, 0.55f);
-                        node.Expanded = DrawFoldout(node, node.Expanded, node.Label, node.Icon);
-                        GUI.color = prevColor;
-                        if (node.Expanded) DrawChildren(node.Children, depth + 1);
-                    }
-                    else
-                    {
-                        DrawMissingRefLeaf(node);
-                    }
-                    break;
-            }
-        }
-
-        private void DrawChildren(List<Node> children, int depth)
-        {
-            foreach (var c in children)
-                if (MatchesFilter(c)) DrawNode(c, depth);
-        }
-
-        private bool MatchesFilter(Node node)
-        {
-            if (string.IsNullOrEmpty(_filter)) return true;
-            if (node.Label.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            return node.Children.Any(MatchesFilter);
-        }
-
-        private bool DrawFoldout(Node node, bool expanded, string label, Texture icon, GUIStyle style = null)
-        {
-            bool altHeld = (Event.current.modifiers & EventModifiers.Alt) != 0;
-            var ev = Event.current;
-            var drawStyle = style ?? StableRefEditorUtility.FoldoutStyle;
-
-            var rowRect = GUILayoutUtility.GetRect(
-                new GUIContent(label, icon), drawStyle,
-                GUILayout.Height(EditorGUIUtility.singleLineHeight));
-
-            bool selectable = node.Kind != NodeKind.Group;
-            bool isSelected = selectable && _selectedNode == node;
-
-            if (isSelected && ev.type == EventType.Repaint)
-                EditorGUI.DrawRect(new Rect(0, rowRect.y, position.width, rowRect.height), StableRefEditorUtility.SelectionColor);
-
-            var prevContent = GUI.contentColor;
-            if (isSelected) GUI.contentColor = StableRefEditorUtility.SelectionTextColor;
-
-            bool newExpanded = EditorGUI.Foldout(rowRect, expanded,
-                new GUIContent(label, icon), toggleOnLabelClick: false, drawStyle);
-
-            GUI.contentColor = prevContent;
-
-            if (ev.type == EventType.MouseDown && ev.button == 0)
-            {
-                var indented = EditorGUI.IndentedRect(rowRect);
-                var labelRect = new Rect(indented.x + StableRefEditorUtility.ArrowW, rowRect.y,
-                    rowRect.xMax - indented.x - StableRefEditorUtility.ArrowW, rowRect.height);
-
-                if (labelRect.Contains(ev.mousePosition))
-                {
-                    if (selectable) _selectedNode = node;
-                    if (node.PingTarget != null) EditorGUIUtility.PingObject(node.PingTarget);
-                    if (ev.clickCount == 2) newExpanded = !newExpanded;
-                    Repaint();
-                }
-            }
-
-            if (newExpanded != expanded && altHeld)
-                SetExpandedRecursive(node, newExpanded);
-
-            return newExpanded;
-        }
-
-        private void DrawLeaf(Node node)
-        {
-            var fullRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.label,
-                GUILayout.Height(EditorGUIUtility.singleLineHeight));
-
-            bool isSelected = _selectedNode == node;
-            if (isSelected && Event.current.type == EventType.Repaint)
-                EditorGUI.DrawRect(new Rect(0, fullRect.y, position.width, fullRect.height), StableRefEditorUtility.SelectionColor);
-
-            var rect = EditorGUI.IndentedRect(fullRect);
-            var ev = Event.current;
-
-            if (ev.type == EventType.MouseDown && rect.Contains(ev.mousePosition))
-            {
-                _selectedNode = node;
-                if (node.PingTarget != null) EditorGUIUtility.PingObject(node.PingTarget);
-                Repaint();
-                ev.Use();
-                return;
-            }
-
-            var prevContent = GUI.contentColor;
-            if (isSelected) GUI.contentColor = StableRefEditorUtility.SelectionTextColor;
-            GUI.Label(rect, new GUIContent(" " + node.Label, node.Icon));
-            GUI.contentColor = prevContent;
-        }
-
-        private void DrawMissingRefLeaf(Node node)
-        {
-            var fullRect = GUILayoutUtility.GetRect(GUIContent.none, EditorStyles.label,
-                GUILayout.Height(EditorGUIUtility.singleLineHeight));
-
-            bool isSelected = _selectedNode == node;
-            if (isSelected && Event.current.type == EventType.Repaint)
-                EditorGUI.DrawRect(new Rect(0, fullRect.y, position.width, fullRect.height), StableRefEditorUtility.SelectionColor);
-
-            var rect = EditorGUI.IndentedRect(fullRect);
-            var ev = Event.current;
-
-            if (ev.type == EventType.MouseDown && rect.Contains(ev.mousePosition))
-            {
-                _selectedNode = node;
-                if (node.PingTarget != null) EditorGUIUtility.PingObject(node.PingTarget);
-                Repaint();
-                ev.Use();
-                return;
-            }
-
-            var prevContent = GUI.contentColor;
-            if (isSelected)
-                GUI.contentColor = StableRefEditorUtility.SelectionTextColor;
-            else
-                GUI.contentColor = new Color(0.75f, 0.75f, 0.75f);
-
-            GUI.Label(rect, new GUIContent(" " + node.Label, node.Icon));
-            GUI.contentColor = prevContent;
-        }
-
-        private static void SetExpandedRecursive(Node node, bool expanded)
-        {
-            node.Expanded = expanded;
-            foreach (var c in node.Children)
-                SetExpandedRecursive(c, expanded);
-        }
-
         private static void DrawTips()
         {
-            GUILayout.FlexibleSpace();
             EditorGUILayout.LabelField(
                 "Tip: only assets and scenes that are currently open are scanned —\n" +
                 "open the scenes you want checked, then re-run the scan.",
@@ -389,14 +203,14 @@ namespace SST.StableRef
             bool sceneLoaded = false, string sceneName = null)
         {
             if (target is not MonoBehaviour && target is not ScriptableObject) return;
-            if (!SerializationUtility.HasManagedReferencesWithMissingTypes(target)
-                && !StableRefPropertyUtils.MayContainStableRef(target.GetType())) return;
-
-            var objectId = GlobalObjectId.GetGlobalObjectIdSlow(target);
-            if (!_scanSeen.Add(objectId)) return;
+            if (!StableRefPropertyUtils.MayContainStableRef(target.GetType())
+                && !SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
 
             var missingRefs = CollectMissingRefs(target);
             if (missingRefs.Count == 0) return;
+
+            var objectId = GlobalObjectId.GetGlobalObjectIdSlow(target);
+            if (!_scanSeen.Add(objectId)) return;
 
             List<string> goChain = null;
             if (target is Component comp)
@@ -445,9 +259,9 @@ namespace SST.StableRef
                     });
                 }
 
-                enter = iter.propertyType == SerializedPropertyType.Generic
-                        || (iter.propertyType == SerializedPropertyType.ManagedReference
-                            && iter.managedReferenceValue != null);
+                enter = iter.propertyType == SerializedPropertyType.ManagedReference
+                    ? StableRefPropertyUtils.HasManagedValue(iter)
+                    : StableRefPropertyUtils.MayHoldEntries(iter);
             }
 
             return result;
@@ -491,11 +305,11 @@ namespace SST.StableRef
 
         private void BuildTree()
         {
-            _roots = new List<Node>();
+            _roots = new List<StableRefResultTree.Node>();
 
-            var prefabGroup = new Node { Kind = NodeKind.Group, Label = "Prefabs" };
-            var sceneGroup  = new Node { Kind = NodeKind.Group, Label = "Active Scenes" };
-            var soGroup     = new Node { Kind = NodeKind.Group, Label = "Scriptable Objects" };
+            var prefabGroup = new Node { Kind = NodeKind.Group, Label = "Prefabs", Expanded = true };
+            var sceneGroup  = new Node { Kind = NodeKind.Group, Label = "Active Scenes", Expanded = true };
+            var soGroup     = new Node { Kind = NodeKind.Group, Label = "Scriptable Objects", Expanded = true };
 
             foreach (var assetGroup in _scanEntries.GroupBy(e => e.AssetPath).OrderBy(g => g.Key))
             {
@@ -534,7 +348,7 @@ namespace SST.StableRef
                         {
                             Kind = NodeKind.Component,
                             Label = entry.Label,
-                            Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
+                            Icon = ScriptIcon,
                             PingTarget = entry.Target,
                             ObjectId = entry.ObjectId,
                             AssetPath = assetPath,
@@ -561,11 +375,12 @@ namespace SST.StableRef
             _roots.Add(prefabGroup);
             _roots.Add(sceneGroup);
             _roots.Add(soGroup);
+            _tree.SetRoots(_roots);
         }
 
         private static void AddMissingRefNodes(Node compNode, List<MissingRefInfo> missingRefs, UnityEngine.Object pingTarget)
         {
-            var scriptIcon = EditorGUIUtility.IconContent("cs Script Icon").image;
+            var scriptIcon = ScriptIcon;
             var groupNodes = new Dictionary<string, Node>();
 
             foreach (var r in missingRefs)
@@ -599,7 +414,8 @@ namespace SST.StableRef
                 {
                     Kind = NodeKind.Item,
                     Label = StableRefEditorUtility.ValueLabelPrefix + r.Label,
-                    Icon = EditorGUIUtility.IconContent("console.warnicon.sml").image,
+                    Icon = StableRefEditorUtility.Icon("console.warnicon.sml").image,
+                    Muted = true,
                     PingTarget = pingTarget
                 });
             }
@@ -612,7 +428,7 @@ namespace SST.StableRef
             var t = comp.transform;
             while (t != null) { chain.Insert(0, t); t = t.parent; }
 
-            Node current = assetNode;
+            StableRefResultTree.Node current = assetNode;
             foreach (var tr in chain)
             {
                 var existing = current.Children.FirstOrDefault(
@@ -636,7 +452,7 @@ namespace SST.StableRef
             {
                 Kind = NodeKind.Component,
                 Label = comp.GetType().Name,
-                Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
+                Icon = ScriptIcon,
                 PingTarget = comp,
                 ObjectId = entry.ObjectId,
                 AssetPath = assetPath,
@@ -649,7 +465,7 @@ namespace SST.StableRef
         private static void InsertSceneComponentIntoHierarchy(
             Node assetNode, ScanEntry entry, string assetPath, UnityEngine.Object sceneAsset)
         {
-            Node current = assetNode;
+            StableRefResultTree.Node current = assetNode;
             var chain = entry.GoNameChain;
             for (int i = 0; i < chain.Count; i++)
             {
@@ -675,7 +491,7 @@ namespace SST.StableRef
             {
                 Kind = NodeKind.Component,
                 Label = entry.TypeName,
-                Icon = EditorGUIUtility.IconContent("cs Script Icon").image,
+                Icon = ScriptIcon,
                 PingTarget = sceneAsset,
                 ObjectId = entry.ObjectId,
                 AssetPath = assetPath,
@@ -688,7 +504,7 @@ namespace SST.StableRef
         private void DoFixAll()
         {
             var components = new List<Node>();
-            foreach (var root in _roots) CollectComponents(root, components);
+            foreach (var root in _roots) CollectComponents((Node)root, components);
 
             var seen = new HashSet<GlobalObjectId>();
             var entries = components.Where(n => seen.Add(n.ObjectId)).ToList();
@@ -798,7 +614,7 @@ namespace SST.StableRef
             if (node.Kind == NodeKind.Component)
                 result.Add(node);
             foreach (var c in node.Children)
-                CollectComponents(c, result);
+                CollectComponents((Node)c, result);
         }
 
         private const int MaxFixPasses = 8;
@@ -871,9 +687,9 @@ namespace SST.StableRef
                         result.Add(path);
                 }
 
-                enter = iter.propertyType == SerializedPropertyType.Generic
-                        || (iter.propertyType == SerializedPropertyType.ManagedReference
-                            && iter.managedReferenceValue != null);
+                enter = iter.propertyType == SerializedPropertyType.ManagedReference
+                    ? StableRefPropertyUtils.HasManagedValue(iter)
+                    : StableRefPropertyUtils.MayHoldEntries(iter);
             }
 
             return result;
@@ -884,7 +700,7 @@ namespace SST.StableRef
             wrapper = null;
             if (valueIter.propertyType != SerializedPropertyType.ManagedReference) return false;
             if (valueIter.name != StableRefEntry.ValueFieldName) return false;
-            if (valueIter.managedReferenceValue != null) return false;
+            if (StableRefPropertyUtils.HasManagedValue(valueIter)) return false;
 
             string parentPath = ParentPath(valueIter.propertyPath);
             if (parentPath == null) return false;

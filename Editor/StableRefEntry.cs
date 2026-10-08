@@ -109,11 +109,11 @@ namespace SST.StableRef
             {
                 if (iter.propertyType != SerializedPropertyType.ManagedReference)
                 {
-                    enter = iter.propertyType == SerializedPropertyType.Generic;
+                    enter = StableRefPropertyUtils.MayHoldEntries(iter);
                     continue;
                 }
 
-                if (iter.managedReferenceValue != null)
+                if (StableRefPropertyUtils.HasManagedValue(iter))
                 {
                     enter = true;
                     continue;

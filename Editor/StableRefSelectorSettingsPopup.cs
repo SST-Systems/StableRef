@@ -12,13 +12,17 @@ namespace SST.StableRef
 
         private static readonly Color _borderColor = new(0.1f, 0.1f, 0.1f, 1f);
 
+        private static readonly GUIContent _deepSearchLabel = new("Deep Search",
+            "Also match the name of the script file that declares each type — finds several classes per file and classes " +
+            "named unlike their file. The first search builds an index of the source files in the background.");
+
         internal static void Show(Rect screenPos, StableRefSelectorWindow owner)
         {
             var win = CreateInstance<StableRefSelectorSettingsPopup>();
             win._owner = owner;
             win._w = StableRefSelectorWindow.SavedW;
             win._h = StableRefSelectorWindow.SavedH;
-            win.ShowAsDropDown(screenPos, new Vector2(180f, 116f));
+            win.ShowAsDropDown(screenPos, new Vector2(180f, 136f));
         }
 
         private void OnGUI()
@@ -34,6 +38,14 @@ namespace SST.StableRef
             EditorGUIUtility.labelWidth = 120f;
             StableRefSelectorWindow.ShowCategoryInLabel = EditorGUILayout.Toggle(
                 "Category in Label", StableRefSelectorWindow.ShowCategoryInLabel);
+
+            EditorGUI.BeginChangeCheck();
+            bool deep = EditorGUILayout.Toggle(_deepSearchLabel, StableRefSelectorWindow.DeepSearch);
+            if (EditorGUI.EndChangeCheck())
+            {
+                StableRefSelectorWindow.DeepSearch = deep;
+                if (_owner != null) _owner.OnDeepSearchChanged();
+            }
 
             GUILayout.Space(6f);
             EditorGUIUtility.labelWidth = 52f;

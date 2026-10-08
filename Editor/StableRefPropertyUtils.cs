@@ -48,6 +48,62 @@ namespace SST.StableRef
             return TryResolvePath(property, out var r) && r.IsStableRefValue;
         }
 
+        private static readonly Dictionary<string, Type> _fullTypenameCache = new();
+        private static Dictionary<string, Assembly> _assembliesByName;
+
+        /// <summary>
+        /// Type of the value held by a managed-reference property, or <see langword="null"/> when it is empty or its
+        /// class can't be loaded — the same answer as <c>managedReferenceValue?.GetType()</c>, but read from
+        /// <see cref="SerializedProperty.managedReferenceFullTypename"/>, so the value isn't deserialized.
+        /// </summary>
+        internal static Type GetManagedReferenceType(SerializedProperty property)
+        {
+            if (property.managedReferenceId == StableRefEditorUtility.ManagedRefIdNull) return null;
+
+            string full = property.managedReferenceFullTypename;
+            if (string.IsNullOrEmpty(full)) return null;
+
+            if (!_fullTypenameCache.TryGetValue(full, out var type))
+                _fullTypenameCache[full] = type = ResolveFullTypename(full);
+            return type ?? property.managedReferenceValue?.GetType();
+        }
+
+        /// <summary>Whether a managed-reference property holds a value (see <see cref="GetManagedReferenceType"/>).</summary>
+        internal static bool HasManagedValue(SerializedProperty property) => GetManagedReferenceType(property) != null;
+
+        private static Type ResolveFullTypename(string full)
+        {
+            int space = full.IndexOf(' ');
+            if (space <= 0) return null;
+
+            if (_assembliesByName == null)
+            {
+                _assembliesByName = new Dictionary<string, Assembly>(StringComparer.Ordinal);
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                    _assembliesByName[asm.GetName().Name] = asm;
+            }
+
+            if (!_assembliesByName.TryGetValue(full.Substring(0, space), out var assembly)) return null;
+            try { return assembly.GetType(full.Substring(space + 1).Replace('/', '+'), throwOnError: false); }
+            catch (Exception) { return null; }
+        }
+
+        /// <summary>
+        /// Whether a scan should step into <paramref name="property"/> while looking for StableRef entries: only
+        /// generic (struct / class) properties and arrays of them can hold one — strings, object references, arrays of
+        /// primitives and other built-in types are skipped without visiting their elements. Managed references are
+        /// decided by the caller.
+        /// </summary>
+        internal static bool MayHoldEntries(SerializedProperty property)
+        {
+            if (property.propertyType != SerializedPropertyType.Generic) return false;
+            if (!property.isArray) return true;
+            if (property.arraySize == 0) return false;
+
+            var element = property.GetArrayElementAtIndex(0).propertyType;
+            return element == SerializedPropertyType.Generic || element == SerializedPropertyType.ManagedReference;
+        }
+
         public static bool IsStableRefList(SerializedProperty property)
         {
             if (property.propertyType != SerializedPropertyType.Generic) return false;
@@ -435,6 +491,14 @@ namespace SST.StableRef
                 return cached.Field != null;
             }
 
+            var sharedKey = (rootType, WithoutIndices(property.propertyPath));
+            if (_pathCache.TryGetValue(sharedKey, out cached))
+            {
+                _pathCache[key] = cached;
+                result = cached;
+                return cached.Field != null;
+            }
+
             string path = property.propertyPath.Replace(".Array.data[", "[");
             string[] segs = path.Split('.');
 
@@ -486,7 +550,10 @@ namespace SST.StableRef
                 }
                 
                 if (field == null)
+                {
+                    _pathCache[key] = _pathCache[sharedKey] = default;
                     return false;
+                }
 
                 rawType = field.FieldType;
                 currType = rawType;
@@ -510,8 +577,29 @@ namespace SST.StableRef
                     && field.DeclaringType.IsGenericType
                     && field.DeclaringType.GetGenericTypeDefinition() == typeof(StableRef<>)
             };
-            _pathCache[key] = result;
+            _pathCache[key] = _pathCache[sharedKey] = result;
             return field != null;
+        }
+
+        /// <summary>
+        /// <paramref name="propertyPath"/> with the element indices removed (<c>a.Array.data[3].Value</c> →
+        /// <c>a.Array.data[].Value</c>): the resolution doesn't depend on them, so all elements share one cache entry.
+        /// </summary>
+        private static string WithoutIndices(string propertyPath)
+        {
+            int open = propertyPath.IndexOf('[');
+            if (open < 0) return propertyPath;
+
+            var sb = new System.Text.StringBuilder(propertyPath.Length);
+            bool inIndex = false;
+            foreach (char c in propertyPath)
+            {
+                if (c == '[') inIndex = true;
+                else if (c == ']') inIndex = false;
+                else if (inIndex) continue;
+                sb.Append(c);
+            }
+            return sb.ToString();
         }
 
         private static Type ResolveBaseTypeFromTypename(string managedRefTypename, string propertyType)
