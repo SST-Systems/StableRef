@@ -1,5 +1,15 @@
 # StableRef
 
+## 4.1.2 - 09.10.2026
+
+### Fixed
+
+- **The search fields of Find Usages and Fix Missing Types scroll with the caret.** They were drawn with the runtime `GUILayout.TextField`, which in a docked editor window didn't follow the caret: text longer than the field was cut off and the view stayed on its beginning while typing at the end. Both windows now use the editor's own toolbar search field (`UnityEditor.IMGUI.Controls.SearchField`), built on the editor text field, with its built-in cancel button instead of a separate `✕`; the field is also wider (220 px), and Ctrl+F focuses it.
+
+### Changed
+
+- **Find Usages and Fix Missing Types navigate the keyboard like the type selector.** The arrows only worked once the result tree itself had focus, so after typing a filter you had to click into the list first. Now ↑ ↓ PageUp PageDown Home End also work from the search field. → expands a collapsed node, otherwise jumps down to the next node with children. ← collapses an expanded node, otherwise jumps to the parent (at the top level, to the previous group). Alt makes expand / collapse recursive. Enter toggles a node with children and acts like a click on any other row. While the focused search field holds text, ← → Home End move the caret in the field.
+
 ## 4.1.1 - 08.10.2026
 
 ### Fixed

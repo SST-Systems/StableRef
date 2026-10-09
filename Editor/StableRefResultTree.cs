@@ -10,8 +10,7 @@ namespace SST.StableRef
     /// The result tree of the tool windows (Find Usages, Fix Missing Types): a virtualized foldout list — only the rows
     /// in view are drawn, at a fixed height, from a flat list of visible rows that is rebuilt only when expansion, the
     /// filter or the results change. Mouse: click selects (the arrow or a double-click toggles, Alt — recursively);
-    /// keyboard as in the Hierarchy: ↑ ↓ Home End PageUp PageDown, → expands / goes to the first child, ← collapses /
-    /// goes to the parent, Enter acts like a click.
+    /// keyboard as in the type selector, see <see cref="HandleKeyboard"/>.
     /// </summary>
     internal sealed class StableRefResultTree
     {
@@ -68,6 +67,7 @@ namespace SST.StableRef
         private bool _revealSelected;
         private Vector2 _scroll;
         private float _viewHeight;
+        private int _controlId;
 
         private static GUIStyle _labelStyle;
         private static GUIStyle _selectedLabelStyle;
@@ -131,10 +131,8 @@ namespace SST.StableRef
             EnsureStyles();
             if (_rowsDirty) RebuildRows();
 
-            int controlId = GUIUtility.GetControlID(FocusType.Keyboard, rect);
+            int controlId = _controlId = GUIUtility.GetControlID(FocusType.Keyboard, rect);
             if (Event.current.type != EventType.Layout) _viewHeight = rect.height;
-            HandleKeyboard(controlId);
-            if (_rowsDirty) RebuildRows();
             if (_revealSelected && Event.current.type == EventType.Repaint) RevealSelected();
 
             var content = new Rect(0, 0, rect.width, _rows.Count * RowH);
@@ -289,46 +287,103 @@ namespace SST.StableRef
             GUI.color = prevColor;
         }
 
-        private void HandleKeyboard(int controlId)
+        /// <summary>
+        /// Keyboard navigation, the same as in the type selector. The owner calls it at the start of <c>OnGUI</c>,
+        /// before its search field is drawn so the field cannot swallow the keys; it works while the tree or the search
+        /// field (<paramref name="searchFocused"/>) has keyboard focus. Up / Down / PageUp / PageDown / Home / End move
+        /// over the rows; Right expands a collapsed node, otherwise jumps down to the next node with children; Left
+        /// collapses an expanded node, otherwise jumps to the parent (or, at the top level, to the previous node with
+        /// children); Alt makes expand / collapse recursive. Enter toggles a node with children and acts like a click on
+        /// any other. While the focused search field holds text (<paramref name="searchHasText"/>), Left / Right /
+        /// Home / End stay with the field. Returns true when the key was used — the owner repaints.
+        /// </summary>
+        public bool HandleKeyboard(bool searchFocused, bool searchHasText)
         {
             var ev = Event.current;
-            if (ev.type != EventType.KeyDown || GUIUtility.keyboardControl != controlId || _rows.Count == 0) return;
+            if (ev.type != EventType.KeyDown) return false;
+            if (!searchFocused && (_controlId == 0 || GUIUtility.keyboardControl != _controlId)) return false;
+            if (_rowsDirty) RebuildRows();
+            if (_rows.Count == 0) return false;
 
+            bool textKeys = searchFocused && searchHasText;
             int index = IndexOfSelected();
             int page = Mathf.Max(1, Mathf.FloorToInt(_viewHeight / RowH) - 1);
             Node node = index >= 0 ? _rows[index].Node : null;
 
             switch (ev.keyCode)
             {
-                case KeyCode.UpArrow: Select(Step(index < 0 ? _rows.Count : index, -1)); break;
-                case KeyCode.DownArrow: Select(Step(index, +1)); break;
-                case KeyCode.Home: Select(Step(-1, +1)); break;
-                case KeyCode.End: Select(Step(_rows.Count, -1)); break;
-                case KeyCode.PageUp: Select(Step(Mathf.Max(0, index - page) + 1, -1)); break;
-                case KeyCode.PageDown: Select(Step(Mathf.Min(_rows.Count - 1, index + page) - 1, +1)); break;
-
-                case KeyCode.RightArrow:
-                    if (node == null) return;
-                    if (HasChildren(node) && !IsOpen(node)) SetOpen(node, true, ev.alt);
-                    else if (IsOpen(node)) Select(Step(index, +1));
-                    break;
-
-                case KeyCode.LeftArrow:
-                    if (node == null) return;
-                    if (IsOpen(node)) SetOpen(node, false, ev.alt);
-                    else Select(ParentRow(index));
-                    break;
+                case KeyCode.DownArrow: Move(index, 1); break;
+                case KeyCode.UpArrow: Move(index, -1); break;
+                case KeyCode.PageDown: Move(index, page); break;
+                case KeyCode.PageUp: Move(index, -page); break;
+                case KeyCode.Home when !textKeys: Select(Step(-1, +1)); break;
+                case KeyCode.End when !textKeys: Select(Step(_rows.Count, -1)); break;
+                case KeyCode.RightArrow when !textKeys: ExpandOrNext(index, ev.alt); break;
+                case KeyCode.LeftArrow when !textKeys: CollapseOrParent(index, ev.alt); break;
 
                 case KeyCode.Return:
                 case KeyCode.KeypadEnter:
-                    if (node == null) return;
-                    Clicked?.Invoke(node, 1);
+                    if (node == null) break;
+                    if (HasChildren(node)) SetOpen(node, !IsOpen(node), ev.alt);
+                    else Clicked?.Invoke(node, 1);
                     break;
 
                 default:
-                    return;
+                    return false;
             }
+
             ev.Use();
+            return true;
+        }
+
+        private void Move(int index, int delta)
+        {
+            if (index < 0)
+            {
+                Select(delta > 0 ? Step(-1, +1) : Step(_rows.Count, -1));
+                return;
+            }
+
+            int dir = delta > 0 ? 1 : -1;
+            int target = Mathf.Clamp(index + delta, 0, _rows.Count - 1);
+            int found = Step(target - dir, dir);
+            Select(found >= 0 ? found : Step(target + dir, -dir));
+        }
+
+        private void ExpandOrNext(int index, bool recursive)
+        {
+            if (index < 0) return;
+
+            var node = _rows[index].Node;
+            if (HasChildren(node) && !IsOpen(node))
+            {
+                SetOpen(node, true, recursive);
+                return;
+            }
+
+            for (int i = index + 1; i < _rows.Count; i++)
+                if (_rows[i].Node is { } next && HasChildren(next)) { Select(i); return; }
+        }
+
+        private void CollapseOrParent(int index, bool recursive)
+        {
+            if (index < 0) return;
+
+            var row = _rows[index];
+            if (IsOpen(row.Node))
+            {
+                SetOpen(row.Node, false, recursive);
+                return;
+            }
+
+            if (row.Depth > 0)
+            {
+                Select(ParentRow(index));
+                return;
+            }
+
+            for (int i = index - 1; i >= 0; i--)
+                if (_rows[i].Node is { } prev && HasChildren(prev)) { Select(i); return; }
         }
 
         private int IndexOfSelected()

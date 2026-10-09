@@ -251,7 +251,7 @@ using SST.StableRef;
 
 | Семпл | Что показывает |
 |---|---|
-| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.ru.md) | Поля `StableRef<T>` / `StableRefList<T>` читают и пишут ровно тот же JSON, что голые `T` / `List<T>`, — для ремоут-конфигов, сохранений и данных с сервера; JSON, записанный без конвертера, остаётся читаемым. Нужен Newtonsoft.Json; есть EditMode-тесты. |
+| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.ru.md) | Поля `StableRef<T>` / `StableRefList<T>` читают и пишут ровно тот же JSON, что голые `T` / `List<T>`, — для ремоут-конфигов, сохранений и данных с сервера; JSON, записанный без конвертера, остаётся читаемым. Нужен Newtonsoft.Json. |
 
 ---
 
@@ -261,7 +261,7 @@ using SST.StableRef;
 
 **Что сканируют инструменты:** префабы и ScriptableObject-ассеты в `Assets/` — включая ScriptableObject'ы, лежащие под-ассетами внутри другого файла (узлы графов, клипы Timeline, `StateMachineBehaviour`), которые показываются под своим файлом в группе *Scriptable Objects* как `Имя (Тип)`, — и уже открытые сцены. Пакеты и закрытые сцены не сканируются. При текстовой сериализации (*Force Text*, по умолчанию в Unity) файлы сначала параллельно проверяются как текст, и загружаются только те, где есть данные StableRef или инстанс префаба с ними (варианты, вложенные префабы); бинарные файлы загружаются всегда.
 
-**Деревья результатов.** Find Usages и Fix Missing Types показывают результаты деревом, которое рисует только видимые строки, поэтому десятки тысяч результатов прокручиваются плавно. После скана раскрыты только группы (*Prefabs*, *Active Scenes*, *Scriptable Objects*). Клик по строке пингует её объект, клик по стрелке или двойной клик раскрывает, `Alt`+клик раскрывает или сворачивает всё внутри. Клавиатура работает как в Hierarchy: `↑` `↓` `Home` `End` `PageUp` `PageDown` — перемещение, `→` раскрывает / переходит к первому дочернему, `←` сворачивает / переходит к родителю, `Enter` — пинг. Поиск срабатывает после короткой паузы в наборе. Поиск ищет по именам ассетов, объектов, полей и типов, а для значения — ещё и по имени скрипта, где объявлен его тип, так что имя скрипта находит все типы этого файла; найденная строка показывается со всем содержимым, а путь к каждому совпадению раскрыт, пока поиск активен.
+**Деревья результатов.** Find Usages и Fix Missing Types показывают результаты деревом, которое рисует только видимые строки, поэтому десятки тысяч результатов прокручиваются плавно. После скана раскрыты только группы (*Prefabs*, *Active Scenes*, *Scriptable Objects*). Клик по строке пингует её объект, клик по стрелке или двойной клик раскрывает, `Alt`+клик раскрывает или сворачивает всё внутри. Клавиатура работает как в селекторе типов, в том числе из поля поиска: `↑` `↓` `Home` `End` `PageUp` `PageDown` — перемещение, `→` раскрывает / переходит к следующему узлу с дочерними, `←` сворачивает / переходит к родителю, `Enter` раскрывает или сворачивает узел с дочерними, а на остальных строках — пинг. Поиск срабатывает после короткой паузы в наборе. Поиск ищет по именам ассетов, объектов, полей и типов, а для значения — ещё и по имени скрипта, где объявлен его тип, так что имя скрипта находит все типы этого файла; найденная строка показывается со всем содержимым, а путь к каждому совпадению раскрыт, пока поиск активен.
 
 **Find Usages** (`Tools/StableRef/Find Usages`) — сканирует префабы, открытые сцены и скриптовые объекты и показывает все места, где используется выбранный тип. Также доступно через правый клик на ассете скрипта: `Assets/Find StableRef Usages` — поиск идёт по имени скрипта, поэтому находятся все типы, объявленные в файле, в том числе несколько классов в одном файле. Клик по значению (`SR: Тип`) пингует скрипт, где объявлен тип, двойной клик открывает его.
 
@@ -289,96 +289,25 @@ using SST.StableRef;
 
 ## Интеграция с инспектором
 
-Для проектов со своим инспекторным фреймворком (IMGUI):
+Для проектов со своим IMGUI-фреймворком инспектора:
 
-- **Отрисовка полей значения.** По умолчанию поля внутри значения StableRef рисуются через `EditorGUI.PropertyField`. Реализуй `IStableRefChildrenDrawer` и присвой его `StableRefDrawing.ChildrenDrawer` (из `[InitializeOnLoad]`-типа), чтобы пустить их через свой фреймворк — тогда его атрибуты работают и внутри значений StableRef. Он вызывается только для раскрытого поля со значением одного типа; селектор, missing-записи, multi-object editing и контекстное меню остаются за StableRef. Если высота того, что рисует твой drawer, меняется из-за его собственного состояния (foldout'ы, вкладки, условные поля), вызывай `StableRefDrawing.InvalidateLayout()` — списки StableRef кэшируют свою высоту, и без этого элементы будут наезжать друг на друга до смены выделения. Меняй значения через контролы `EditorGUI` по property, чтобы выставлялся `GUI.changed`, — по этому сигналу StableRef обновляет снапшот записи для восстановления; значение, записанное в объект напрямую, сохранит старый снапшот до следующего изменения или Resync.
-- **Имена, категории, подсказки, цвета и порядок типов в селекторе.** Реализуй `IRefTypeMetadataProvider` (конструктор без параметров, находится автоматически), чтобы подключить свои атрибуты. Провайдеры опрашиваются по `Order`; незаполненные поля берутся из имени типа и `[RefCategory]`. `SortOrder` задаёт порядок типов внутри категории (меньше — выше, при равенстве — по имени).
-- **Код, который ищет поля по имени.** `StableRefEditorUtility.GetValueProperty(property)` возвращает managed reference и для `StableRef<T>` (его `Value`), и для обычного поля `[SerializeReference]`, поэтому drawer, читающий `managedReferenceValue`, продолжит работать, когда поле станет `StableRef<T>`.
+- **`IStableRefChildrenDrawer`** — присвой его `StableRefDrawing.ChildrenDrawer` (из `[InitializeOnLoad]`-типа), чтобы поля внутри значений StableRef рисовались через твой фреймворк и его атрибуты работали и там. Если их высота меняется из-за собственного состояния drawer'а, вызывай `StableRefDrawing.InvalidateLayout()`.
+- **`IRefTypeMetadataProvider`** — имена, категории, подсказки и порядок типов в селекторе из твоих атрибутов; находится автоматически.
+- **`StableRefEditorUtility.GetValueProperty(property)`** — managed reference и для `StableRef<T>`, и для обычного поля `[SerializeReference]`, для drawer'ов, читающих `managedReferenceValue`.
 
-```csharp
-[InitializeOnLoad]
-static class MyInspectorStableRefBridge
-{
-    static MyInspectorStableRefBridge() => StableRefDrawing.ChildrenDrawer = new MyChildrenDrawer();
-}
-
-sealed class MyChildrenDrawer : IStableRefChildrenDrawer
-{
-    public float GetChildrenHeight(SerializedProperty value) => MyInspector.GetChildrenHeight(value);
-    public void DrawChildren(Rect position, SerializedProperty value) => MyInspector.DrawChildren(position, value);
-}
-
-// Runtime-сборка — свой атрибут на типах значений
-[AttributeUsage(AttributeTargets.Class, Inherited = false)]
-public sealed class EffectInfoAttribute : Attribute
-{
-    public readonly string Name;
-    public readonly string Category;
-    public string Tooltip;
-    public int Priority;
-
-    public EffectInfoAttribute(string name, string category = null)
-    {
-        Name = name;
-        Category = category;
-    }
-}
-
-[Serializable, RefTypeId("my-game.burn")]
-[EffectInfo("Burn", "Damage/Over Time", Tooltip = "Наносит урон каждую секунду", Priority = 10)]
-public class Burn : IEffect { public float DamagePerSecond; }
-
-// Editor-сборка — отображаем его в селекторе
-sealed class EffectInfoMetadata : IRefTypeMetadataProvider
-{
-    public int Order => 0;
-
-    public bool TryGetMetadata(Type type, out RefTypeMetadata metadata)
-    {
-        var info = type.GetCustomAttribute<EffectInfoAttribute>();
-        metadata = info == null
-            ? default
-            : new RefTypeMetadata
-            {
-                DisplayName = info.Name,
-                Category = info.Category,
-                Tooltip = info.Tooltip,
-                SortOrder = -info.Priority   // больший приоритет — выше
-            };
-        return info != null;
-    }
-}
-```
+Подробности — в XML-документации этих типов.
 
 ---
 
 ## Копирование и вставка
 
-Встроенные в Unity **Copy Component** / **Paste Component Values** не всегда корректно обрабатывают данные `[SerializeReference]` при переносе между разными сериализованными документами (например, со сцены в префаб). Это может оставить повреждённую запись в `managedReferences`, из-за которой в консоли появляется ошибка вида:
+Встроенные в Unity **Copy Component** / **Paste Component Values** могут повредить данные `[SerializeReference]` при переносе между документами (например, со сцены в префаб) — остаётся неуходящая ошибка `Could not update a managed instance value at property path 'managedReferences[...]'`. Переноси значения StableRef через меню по правому клику: оно создаёт новую managed reference в целевом документе, а не копирует сериализованные байты:
 
-```
-Could not update a managed instance value at property path 'managedReferences[...]', with value '...'
-```
+- **Поле** — `StableRef/Copy`, `StableRef/Paste`.
+- **Элемент списка** (в `StableRefList<T>` — в любом месте строки; также в `List<StableRef<T>>`, `StableRef<T>[]` и списках с `[RefSelector]`) — `Paste as New Element`, `Duplicate Array Element` (полная копия; стандартный Duplicate в Unity делит ссылку между элементами), `Delete Array Element`.
+- **Заголовок списка** — `StableRef/Copy` для всех элементов, `StableRef/Paste/Replace` или `StableRef/Paste/Append`.
 
-Эта ошибка может не пропадать даже после перезапуска редактора и **не** исчезает при откате (revert) компонента — повреждение уже записано в сериализованный файл.
-
-Чтобы безопасно переносить значения `StableRef<T>` / `StableRefList<T>`, используй встроенное контекстное меню по правому клику вместо стандартного копирования/вставки компонента. ПКМ по элементу списка открывает меню **этого элемента** (в `StableRefList<T>` — в любом месте его строки), ПКМ по заголовку списка — меню всего списка. Те же команды элемента работают в `List<StableRef<T>>`, `StableRef<T>[]` и списках с `[RefSelector]` — там строки рисует сам Unity, поэтому кликай по полю элемента:
-
-| Пункт меню | Где вызывать (ПКМ) | Что делает |
-|---|---|---|
-| `StableRef/Copy` | Одиночное поле `StableRef<T>` | Копирует текущее значение во внутренний буфер. |
-| `StableRef/Paste` | Одиночное поле `StableRef<T>` совместимого типа | Создаёт новую managed reference в целевом поле. |
-| `Paste as New Element` | Элемент списка (в `StableRefList<T>` — любая часть строки: кнопка типа, ручка перетаскивания, отступы) | Вставляет скопированное значение новым элементом сразу после него. |
-| `Duplicate Array Element` | Элемент списка | Вставляет полную копию сразу после элемента (стандартный Duplicate в Unity сделал бы оба элемента ссылками на один и тот же объект). |
-| `Delete Array Element` | Элемент списка | Удаляет этот элемент. |
-| `StableRef/Copy` | Заголовок `StableRefList<T>` (или массив `StableRef<T>`) | Копирует все элементы списка. |
-| `StableRef/Paste/Replace` или `StableRef/Paste/Append` | Заголовок `StableRefList<T>` (или массив `StableRef<T>`) | Заменяет или добавляет скопированные элементы. |
-
-Это безопасно между GameObject'ами, префабами и сценами: вместо копирования сырых сериализованных байт создаётся новая managed reference прямо в целевом документе, поэтому `managedReferences` не повреждается.
-
-При копировании компонента со StableRef-полями между сценой и префабом используй это меню именно для StableRef-полей, а не стандартный Copy Component / Paste Component Values.
-
-> **Предупреждение:** даже с этим меню под рукой сохраняй бдительность. Поля на основе `[SerializeReference]` (в том числе `StableRef`/`StableRefList`) не всегда очевидным образом копируются или переносятся даже при тривиальных встроенных операциях Unity — Duplicate, drag & drop в Hierarchy, Apply/Revert префаб-оверрайдов, слияние сцен/префабов и похожих действиях. Перед массовыми изменениями делай коммит или бэкап и проверяй результат после операции.
+> **Предупреждение:** поля `[SerializeReference]` (и StableRef тоже) не всегда переживают встроенные операции Unity — Duplicate, drag & drop, Apply/Revert префабов, слияния. Перед массовыми изменениями делай коммит и проверяй результат.
 
 ---
 
