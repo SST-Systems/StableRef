@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
+using UnityEditor.IMGUI.Controls;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -26,8 +27,7 @@ namespace SST.StableRef
             EditorApplication.delayCall += w.DoScan;
         }
 
-        private const float SearchW = 160f;
-        private const float ClearBtnW = 18f;
+        private const float SearchW = 220f;
 
         private sealed class Node : StableRefResultTree.Node
         {
@@ -39,6 +39,7 @@ namespace SST.StableRef
         private List<StableRefResultTree.Node> _roots;
         private StableRefResultTree _tree;
         private string _filter = "";
+        private SearchField _searchField;
         private bool _hasScanned;
         private bool _showDomainReloadHint;
 
@@ -53,6 +54,7 @@ namespace SST.StableRef
             _hasScanned = false;
             _showDomainReloadHint = false;
             _filter = "";
+            _searchField = new SearchField();
             _tree = new StableRefResultTree
             {
                 Clicked = (node, _) =>
@@ -70,6 +72,9 @@ namespace SST.StableRef
 
         private void OnGUI()
         {
+            if (_hasScanned && _roots != null && _tree.HandleKeyboard(_searchField.HasFocus(), _filter.Length > 0))
+                Repaint();
+
             DrawToolbar();
 
             if (!_hasScanned || _roots == null)
@@ -93,21 +98,12 @@ namespace SST.StableRef
         {
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                EditorGUI.BeginChangeCheck();
-                _filter = GUILayout.TextField(_filter, EditorStyles.toolbarSearchField,
-                    GUILayout.Width(SearchW));
-                if (EditorGUI.EndChangeCheck())
+                string next = _searchField.OnToolbarGUI(_filter, GUILayout.Width(SearchW)) ?? "";
+                if (next != _filter)
                 {
-                    _tree.SetFilterDelayed(_filter);
-                    Repaint();
-                }
-
-                if (!string.IsNullOrEmpty(_filter) &&
-                    GUILayout.Button("✕", EditorStyles.toolbarButton, GUILayout.Width(ClearBtnW)))
-                {
-                    _filter = "";
-                    _tree.Filter = "";
-                    GUI.FocusControl(null);
+                    _filter = next;
+                    if (_filter.Length == 0) _tree.Filter = "";
+                    else _tree.SetFilterDelayed(_filter);
                     Repaint();
                 }
 

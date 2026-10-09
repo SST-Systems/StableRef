@@ -251,7 +251,7 @@ Import via **Window → Package Manager → StableRef → Samples**. Each sample
 
 | Sample | What it shows |
 |---|---|
-| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.md) | `StableRef<T>` / `StableRefList<T>` fields read and write exactly the JSON of bare `T` / `List<T>` fields — for remote configs, saves and server payloads; JSON written without the converter stays readable. Requires Newtonsoft.Json; includes EditMode tests. |
+| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.md) | `StableRef<T>` / `StableRefList<T>` fields read and write exactly the JSON of bare `T` / `List<T>` fields — for remote configs, saves and server payloads; JSON written without the converter stays readable. Requires Newtonsoft.Json. |
 
 ---
 
@@ -261,7 +261,7 @@ All tools are available under **Tools → StableRef** in the Unity menu bar.
 
 **What the tools scan:** prefabs and ScriptableObject assets under `Assets/` — including ScriptableObjects stored as sub-assets inside another asset file (graph nodes, Timeline clips, `StateMachineBehaviour`s), which are listed under their file in the *Scriptable Objects* group as `Name (Type)` — and the scenes that are already open. Packages and closed scenes are not scanned. With text serialization (*Force Text*, Unity's default) files are first checked as text, in parallel, and only those that hold StableRef data — or instantiate a prefab that does (variants, nested prefabs) — are loaded; binary files are always loaded.
 
-**Result trees.** Find Usages and Fix Missing Types show their results in a tree that draws only the visible rows, so tens of thousands of results scroll smoothly. After a scan only the groups (*Prefabs*, *Active Scenes*, *Scriptable Objects*) are expanded. Click a row to ping its object, click the arrow or double-click to expand, `Alt`+click to expand or collapse everything under it. The keyboard works as in the Hierarchy: `↑` `↓` `Home` `End` `PageUp` `PageDown` move, `→` expands / goes to the first child, `←` collapses / goes to the parent, `Enter` pings. The search runs once typing pauses for a moment. The search field matches asset, object, field and type names, and for a value also the name of the script that declares its type, so a script name finds every type of that file; a matching row is shown with everything under it, and every row on the way to a match is expanded while the search is active.
+**Result trees.** Find Usages and Fix Missing Types show their results in a tree that draws only the visible rows, so tens of thousands of results scroll smoothly. After a scan only the groups (*Prefabs*, *Active Scenes*, *Scriptable Objects*) are expanded. Click a row to ping its object, click the arrow or double-click to expand, `Alt`+click to expand or collapse everything under it. The keyboard works as in the type selector, also from the search field: `↑` `↓` `Home` `End` `PageUp` `PageDown` move, `→` expands / jumps to the next node with children, `←` collapses / goes to the parent, `Enter` expands or collapses a node with children and pings any other row. The search runs once typing pauses for a moment. The search field matches asset, object, field and type names, and for a value also the name of the script that declares its type, so a script name finds every type of that file; a matching row is shown with everything under it, and every row on the way to a match is expanded while the search is active.
 
 **Find Usages** (`Tools/StableRef/Find Usages`) — scans prefabs, active scenes, and scriptable objects to show every place a selected type is used. Also accessible via right-click on a script asset: `Assets/Find StableRef Usages` — it searches by the script's name, so every type declared in the file is found, including several classes per file. Clicking a value (`SR: Type`) pings the script that declares the type, double-clicking opens it.
 
@@ -289,96 +289,25 @@ Entries whose ID cannot be resolved are **skipped and kept** by Fix All (restore
 
 ## Inspector integration
 
-For projects with their own inspector framework (IMGUI):
+For projects with their own IMGUI inspector framework:
 
-- **Drawing the fields of values.** By default the fields inside a StableRef value are drawn with `EditorGUI.PropertyField`. Implement `IStableRefChildrenDrawer` and assign it to `StableRefDrawing.ChildrenDrawer` (from an `[InitializeOnLoad]` type) to route them through your framework, so its attributes work inside StableRef values too. It is called only for an expanded field holding a value of a single type; the selector, missing entries, multi-object editing and the context menu stay with StableRef. When the height of what your drawer draws changes because of its own state (foldouts, tabs, conditional fields), call `StableRefDrawing.InvalidateLayout()` — StableRef lists cache their height and would otherwise overlap until the selection changes. Edit values through `EditorGUI` controls on the property, so `GUI.changed` is set — StableRef refreshes the entry's recovery snapshot on that signal; a value written to the object directly keeps the old snapshot until the next change or Resync.
-- **Type names, categories, tooltips, colors and order in the selector.** Implement `IRefTypeMetadataProvider` (parameterless constructor, found automatically) to map your own attributes. Providers are asked in `Order`; empty fields fall back to the type name and `[RefCategory]`. `SortOrder` orders types within a category (lower first, then by name).
-- **Code that finds fields by name.** `StableRefEditorUtility.GetValueProperty(property)` returns the managed reference of both a `StableRef<T>` (its `Value`) and a plain `[SerializeReference]` field, so a drawer that reads `managedReferenceValue` keeps working when a field becomes a `StableRef<T>`.
+- **`IStableRefChildrenDrawer`** — assign it to `StableRefDrawing.ChildrenDrawer` (from an `[InitializeOnLoad]` type) to draw the fields inside StableRef values through your framework, so its attributes work there too. When their height changes because of your drawer's own state, call `StableRefDrawing.InvalidateLayout()`.
+- **`IRefTypeMetadataProvider`** — names, categories, tooltips and order of types in the selector from your own attributes; found automatically.
+- **`StableRefEditorUtility.GetValueProperty(property)`** — the managed reference of both a `StableRef<T>` and a plain `[SerializeReference]` field, for drawers that read `managedReferenceValue`.
 
-```csharp
-[InitializeOnLoad]
-static class MyInspectorStableRefBridge
-{
-    static MyInspectorStableRefBridge() => StableRefDrawing.ChildrenDrawer = new MyChildrenDrawer();
-}
-
-sealed class MyChildrenDrawer : IStableRefChildrenDrawer
-{
-    public float GetChildrenHeight(SerializedProperty value) => MyInspector.GetChildrenHeight(value);
-    public void DrawChildren(Rect position, SerializedProperty value) => MyInspector.DrawChildren(position, value);
-}
-
-// Runtime assembly — your own attribute on the value types
-[AttributeUsage(AttributeTargets.Class, Inherited = false)]
-public sealed class EffectInfoAttribute : Attribute
-{
-    public readonly string Name;
-    public readonly string Category;
-    public string Tooltip;
-    public int Priority;
-
-    public EffectInfoAttribute(string name, string category = null)
-    {
-        Name = name;
-        Category = category;
-    }
-}
-
-[Serializable, RefTypeId("my-game.burn")]
-[EffectInfo("Burn", "Damage/Over Time", Tooltip = "Deals damage every second", Priority = 10)]
-public class Burn : IEffect { public float DamagePerSecond; }
-
-// Editor assembly — map it to the selector
-sealed class EffectInfoMetadata : IRefTypeMetadataProvider
-{
-    public int Order => 0;
-
-    public bool TryGetMetadata(Type type, out RefTypeMetadata metadata)
-    {
-        var info = type.GetCustomAttribute<EffectInfoAttribute>();
-        metadata = info == null
-            ? default
-            : new RefTypeMetadata
-            {
-                DisplayName = info.Name,
-                Category = info.Category,
-                Tooltip = info.Tooltip,
-                SortOrder = -info.Priority   // higher priority first
-            };
-        return info != null;
-    }
-}
-```
+Details are in the XML docs of these types.
 
 ---
 
 ## Copying and pasting
 
-Unity's built-in **Copy Component** / **Paste Component Values** does not reliably handle `[SerializeReference]` data across different serialized documents (e.g. scene → prefab). It can leave behind a corrupted `managedReferences` entry, producing a console error like:
+Unity's **Copy Component** / **Paste Component Values** can corrupt `[SerializeReference]` data when copying between documents (e.g. scene → prefab), leaving a persistent `Could not update a managed instance value at property path 'managedReferences[...]'` error. Move StableRef values with the right-click menu instead — it builds a new managed reference in the destination rather than copying serialized bytes:
 
-```
-Could not update a managed instance value at property path 'managedReferences[...]', with value '...'
-```
+- **A field** — `StableRef/Copy`, `StableRef/Paste`.
+- **A list element** (in `StableRefList<T>` anywhere on its row; also in `List<StableRef<T>>`, `StableRef<T>[]` and `[RefSelector]` lists) — `Paste as New Element`, `Duplicate Array Element` (a deep copy; Unity's own Duplicate shares the reference), `Delete Array Element`.
+- **A list header** — `StableRef/Copy` for all entries, `StableRef/Paste/Replace` or `StableRef/Paste/Append`.
 
-This error can persist across editor restarts and does **not** go away by reverting the component, because the corruption is already baked into the serialized file.
-
-To move `StableRef<T>` / `StableRefList<T>` values around safely, use the built-in right-click menu instead of Unity's native component copy/paste. Right-clicking a list element opens the menu of **that element** (in a `StableRefList<T>` anywhere on its row); right-clicking the list header opens the menu of the whole list. The same element commands work in `List<StableRef<T>>`, `StableRef<T>[]` and `[RefSelector]` lists — there Unity draws the rows itself, so right-click the element's field:
-
-| Menu item | Where to right-click | What it does |
-|---|---|---|
-| `StableRef/Copy` | A single `StableRef<T>` field | Copies the current value to an internal clipboard. |
-| `StableRef/Paste` | A single `StableRef<T>` field of a compatible type | Creates a fresh managed reference in the target field. |
-| `Paste as New Element` | A list element (in `StableRefList<T>`: any part of its row — type button, drag handle, row padding) | Inserts the copied value as a new element right after it. |
-| `Duplicate Array Element` | A list element | Inserts a deep copy right after that element (Unity's own Duplicate would share the same managed reference between both elements). |
-| `Delete Array Element` | A list element | Removes that element. |
-| `StableRef/Copy` | The `StableRefList<T>` header (or an array of `StableRef<T>`) | Copies all entries in the list. |
-| `StableRef/Paste/Replace` or `StableRef/Paste/Append` | The `StableRefList<T>` header (or an array of `StableRef<T>`) | Replaces or appends the copied entries. |
-
-This is safe across GameObjects, prefabs, and scenes: instead of copying raw serialized bytes, it rebuilds a brand-new managed reference directly in the destination document, so it never corrupts `managedReferences`.
-
-When copying a component that contains `StableRef` fields between a scene and a prefab, use this menu for the StableRef fields specifically rather than Unity's native Copy Component / Paste Component Values.
-
-> **Warning:** even with this menu available, stay cautious. `[SerializeReference]`-based fields (including `StableRef`/`StableRefList`) don't always copy or move as expected, even during trivial built-in Unity operations — Duplicate, drag & drop in the Hierarchy, applying/reverting prefab overrides, scene/prefab merges, and similar actions. Commit or back up your work before bulk changes, and double-check the result afterward.
+> **Warning:** `[SerializeReference]` fields (StableRef included) don't always survive built-in Unity operations — Duplicate, drag & drop, prefab apply/revert, merges. Commit before bulk changes and check the result.
 
 ---
 

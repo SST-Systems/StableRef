@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using UnityEditor;
+using UnityEditor.IMGUI.Controls;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -15,8 +16,7 @@ namespace SST.StableRef
     public sealed class StableRefUsagesWindow : EditorWindow
     {
         private const float FindW = 90f;
-        private const float SearchW = 160f;
-        private const float ClearBtnW = 18f;
+        private const float SearchW = 220f;
         private const float DefaultW = 360f;
         private const float DefaultH = 560f;
         private const string ProgressTitle = "StableRef Usages";
@@ -32,6 +32,7 @@ namespace SST.StableRef
         private List<StableRefResultTree.Node> _roots;
         private StableRefResultTree _tree;
         private string _searchText = "";
+        private SearchField _searchField;
         /// <summary>A type whose declaration index was still being built when the filter last ran.</summary>
         private Type _pendingSearchType;
 
@@ -80,6 +81,7 @@ namespace SST.StableRef
         {
             _roots = null;
             _searchText = "";
+            _searchField = new SearchField();
             _tree = new StableRefResultTree
             {
                 Clicked = OnNodeClicked,
@@ -117,6 +119,9 @@ namespace SST.StableRef
 
         private void OnGUI()
         {
+            if (_roots != null && _tree.HandleKeyboard(_searchField.HasFocus(), _searchText.Length > 0))
+                Repaint();
+
             DrawToolbar();
 
             if (_roots == null)
@@ -136,21 +141,12 @@ namespace SST.StableRef
         {
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                EditorGUI.BeginChangeCheck();
-                _searchText = GUILayout.TextField(_searchText, EditorStyles.toolbarSearchField,
-                    GUILayout.Width(SearchW));
-                if (EditorGUI.EndChangeCheck())
+                string next = _searchField.OnToolbarGUI(_searchText, GUILayout.Width(SearchW)) ?? "";
+                if (next != _searchText)
                 {
-                    _tree.SetFilterDelayed(_searchText);
-                    Repaint();
-                }
-
-                if (!string.IsNullOrEmpty(_searchText)
-                    && GUILayout.Button("✕", EditorStyles.toolbarButton, GUILayout.Width(ClearBtnW)))
-                {
-                    _searchText = "";
-                    _tree.Filter = "";
-                    GUI.FocusControl(null);
+                    _searchText = next;
+                    if (_searchText.Length == 0) _tree.Filter = "";
+                    else _tree.SetFilterDelayed(_searchText);
                     Repaint();
                 }
 
