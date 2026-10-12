@@ -15,8 +15,9 @@
 ## Что внутри
 
 - `StableRefJsonConverter` (неймспейс `SST.StableRef.Json`) — сам конвертер; обрабатывает любые `StableRef<T>` и `StableRefList<T>`.
+- `StableRefJson.DataEquals(a, b, settings)` — одинаковые ли данные у двух объектов с точки зрения JSON, чтобы применять пришедшие данные, только если они изменились (см. [Сравнение данных](#сравнение-данных)).
 - `SST.StableRef.Newtonsoft` — runtime-сборка, в которой он лежит (все платформы, auto-referenced); ссылается на `Newtonsoft.Json.dll` по имени.
-- `Tests/` — EditMode-тесты (`SST.StableRef.Newtonsoft.Tests`): совпадение JSON с голыми полями, `TypeNameHandling.Auto`, конвертеры для `T`, `Populate`, работа со списками, стабильные ID, `null`, JSON, записанный без конвертера.
+- `Tests/` — EditMode-тесты (`SST.StableRef.Newtonsoft.Tests`): совпадение JSON с голыми полями, `TypeNameHandling.Auto`, конвертеры для `T`, `Populate`, работа со списками, стабильные ID, `null`, JSON, записанный без конвертера, `DataEquals`.
 
 ## Подключение
 
@@ -67,6 +68,27 @@ var json = JsonConvert.SerializeObject(config, settings);
 считается обёрткой, и из него берётся `Value`. Это покрывает JSON, записанный в редакторе (все поля обёртки), в билде
 (только `TypeId` и `Value`), и списки 3.x, записанные массивом обёрток. Тип значения, у которого единственные поля
 случайно называются `TypeId` и `Value`, будет принят за обёртку.
+
+### Сравнение данных
+
+`StableRefJson.DataEquals(a, b, settings)` сериализует оба объекта твоими настройками и сравнивает деревья JSON
+(`JToken.DeepEquals`: порядок свойств не важен, порядок элементов массива — важен). Работает в билдах: сравниваются
+только значения, а не стабильные ID и снапшоты — они есть только в редакторе. Типичный случай: применять конфиг
+с сервера, только если он отличается от загруженного.
+
+```csharp
+var incoming = JsonConvert.DeserializeObject<GameConfig>(serverJson, settings);
+if (!StableRefJson.DataEquals(current, incoming, settings))
+    Apply(incoming);
+```
+
+Сначала десериализуй и сравнивай объекты, а не сырой JSON: обе стороны тогда проходят через один и тот же код,
+и поля, которых в ответе нет или которые в нём лишние, значения по умолчанию и порядок ключей изменениями не
+считаются. Значение другого типа внутри `StableRef<T>` / `StableRefList<T>` — изменение, даже если оба типа пишут
+одинаковые поля: при `TypeNameHandling.None` сравнение идёт с `Auto`. Перегрузка с `JsonSerializer` использует его
+как есть — задай ему `TypeNameHandling.Auto` (или конвертер, который пишет тип). Поля, которые твои настройки не
+пишут, не сравниваются. Сравнивай сам класс с данными, а не `ScriptableObject`, который его держит, — Newtonsoft
+добавит `name`, `hideFlags` и другие свойства движка.
 
 ## Ограничения
 

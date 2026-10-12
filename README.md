@@ -251,7 +251,7 @@ Import via **Window → Package Manager → StableRef → Samples**. Each sample
 
 | Sample | What it shows |
 |---|---|
-| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.md) | `StableRef<T>` / `StableRefList<T>` fields read and write exactly the JSON of bare `T` / `List<T>` fields — for remote configs, saves and server payloads; JSON written without the converter stays readable. Requires Newtonsoft.Json. |
+| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.md) | `StableRef<T>` / `StableRefList<T>` fields read and write exactly the JSON of bare `T` / `List<T>` fields — for remote configs, saves and server payloads; JSON written without the converter stays readable; `StableRefJson.DataEquals` tells whether incoming data differs from the loaded one. Requires Newtonsoft.Json. |
 | [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.md) | Switching a project from `[SerializeReference]` fields to StableRef with one button: the field types are changed in place (same names, no extra fields), then the saved data moves to the new layout, prefab overrides follow, and the entries get their stable IDs and snapshots. |
 
 ---

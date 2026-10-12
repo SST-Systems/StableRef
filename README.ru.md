@@ -251,7 +251,7 @@ using SST.StableRef;
 
 | Семпл | Что показывает |
 |---|---|
-| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.ru.md) | Поля `StableRef<T>` / `StableRefList<T>` читают и пишут ровно тот же JSON, что голые `T` / `List<T>`, — для ремоут-конфигов, сохранений и данных с сервера; JSON, записанный без конвертера, остаётся читаемым. Нужен Newtonsoft.Json. |
+| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.ru.md) | Поля `StableRef<T>` / `StableRefList<T>` читают и пишут ровно тот же JSON, что голые `T` / `List<T>`, — для ремоут-конфигов, сохранений и данных с сервера; JSON, записанный без конвертера, остаётся читаемым; `StableRefJson.DataEquals` показывает, отличаются ли пришедшие данные от загруженных. Нужен Newtonsoft.Json. |
 | [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.ru.md) | Перевод проекта с полей `[SerializeReference]` на StableRef одной кнопкой: у полей меняется тип на месте (те же имена, без дополнительных полей), затем сохранённые данные переезжают в новую разметку, override'ы префабов идут следом, записи получают стабильные ID и снапшоты. |
 
 ---

@@ -16,8 +16,9 @@ It ships as a sample rather than as part of the package, so StableRef itself has
 ## What's inside
 
 - `StableRefJsonConverter` (namespace `SST.StableRef.Json`) — the converter; handles every `StableRef<T>` and `StableRefList<T>`.
+- `StableRefJson.DataEquals(a, b, settings)` — whether two objects hold the same data as JSON, to apply incoming data only when it changed (see [Comparing data](#comparing-data)).
 - `SST.StableRef.Newtonsoft` — the runtime assembly it lives in (all platforms, auto-referenced); references `Newtonsoft.Json.dll` by name.
-- `Tests/` — EditMode tests (`SST.StableRef.Newtonsoft.Tests`): JSON parity with bare fields, `TypeNameHandling.Auto`, converters for `T`, `Populate`, list handling, stable IDs, `null`, JSON written without the converter.
+- `Tests/` — EditMode tests (`SST.StableRef.Newtonsoft.Tests`): JSON parity with bare fields, `TypeNameHandling.Auto`, converters for `T`, `Populate`, list handling, stable IDs, `null`, JSON written without the converter, `DataEquals`.
 
 ## Set it up
 
@@ -68,6 +69,27 @@ members other than the wrapper's (`TypeDisplayName`, `ObjectRefs`, `ObjectRefPat
 treated as a wrapper, and its `Value` is taken. This covers JSON written in the editor (all wrapper fields), in player
 builds (only `TypeId` and `Value`) and 3.x lists written as arrays of wrappers. A value type whose only fields happen
 to be named `TypeId` and `Value` would be mistaken for a wrapper.
+
+### Comparing data
+
+`StableRefJson.DataEquals(a, b, settings)` serializes both objects with your settings and compares the JSON trees
+(`JToken.DeepEquals`: property order doesn't matter, array order does). It works in players — only the values are
+compared, never the stable IDs or snapshots, which exist only in the editor. Typical use: apply a config from the
+server only when it differs from the loaded one.
+
+```csharp
+var incoming = JsonConvert.DeserializeObject<GameConfig>(serverJson, settings);
+if (!StableRefJson.DataEquals(current, incoming, settings))
+    Apply(incoming);
+```
+
+Deserialize first and compare objects, not the raw JSON: both sides then go through the same code, so members the
+payload omits or has in excess, defaults and key order don't count as changes. A value of another type inside a
+`StableRef<T>` / `StableRefList<T>` is a change even when both types serialize the same members: with
+`TypeNameHandling.None` the comparison uses `Auto`. The overload taking a `JsonSerializer` uses it as is — give it
+`TypeNameHandling.Auto` (or a converter that writes the type). Members your settings don't write are not compared.
+Compare the plain data class, not a `ScriptableObject` holding it — Newtonsoft would include `name`, `hideFlags` and
+other engine properties.
 
 ## Limitations
 
