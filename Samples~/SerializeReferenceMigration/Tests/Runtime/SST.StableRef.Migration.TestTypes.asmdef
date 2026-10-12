@@ -1,0 +1,18 @@
+{
+    "name": "SST.StableRef.Migration.TestTypes",
+    "rootNamespace": "SST.StableRef.Tests",
+    "references": [
+        "SST.StableRef"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

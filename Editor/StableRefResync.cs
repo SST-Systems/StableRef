@@ -18,7 +18,9 @@ namespace SST.StableRef
     /// <b>Tools/StableRef/Resync All</b> covers ScriptableObjects and prefabs under <c>Assets/</c> and the scenes that
     /// are already open. Values themselves are never changed, and missing entries are left alone (Fix Missing Types
     /// handles them). Changed assets are saved one by one — those Unity refuses to save are reported in
-    /// <see cref="Report.UnsavedAssets"/>; changed scenes are marked dirty, not saved. In prefab
+    /// <see cref="Report.UnsavedAssets"/>; changed scenes are marked dirty, not saved. An asset whose entries are
+    /// already in sync in memory but that is dirty is saved too (<see cref="Report.SavedPendingAssets"/>): the entries
+    /// may have been synced without being written, and the file would otherwise stay stale. In prefab
     /// instances and variants only entries whose value is overridden are touched — inherited ones are resynced in
     /// their source prefab — so no override is created for metadata alone.
     /// </remarks>
@@ -38,6 +40,12 @@ namespace SST.StableRef
             /// saved). Their entries are not counted as updated and stay out of sync until the asset can be saved.
             /// </summary>
             public List<string> UnsavedAssets;
+            /// <summary>
+            /// Assets whose entries were already in sync in memory but not on disk — synced by the inspector or by an
+            /// editor script that didn't save — and that the run saved. Without this they would keep the stale file
+            /// while every run reported nothing to update.
+            /// </summary>
+            public List<string> SavedPendingAssets;
         }
 
         [MenuItem("Tools/StableRef/Resync All", priority = 301)]
@@ -54,6 +62,12 @@ namespace SST.StableRef
 
             Debug.Log($"[StableRef] Resync: updated {report.UpdatedEntries} entr{(report.UpdatedEntries == 1 ? "y" : "ies")} " +
                       $"in {report.UpdatedObjects} object{(report.UpdatedObjects == 1 ? "" : "s")}.");
+            if (report.SavedPendingAssets.Count > 0)
+            {
+                Debug.Log(
+                    "[StableRef] Resync: these assets had entries synced in memory but not saved, and were saved now:\n" +
+                    string.Join("\n", report.SavedPendingAssets));
+            }
             if (report.TypesWithoutId.Count > 0)
             {
                 Debug.LogWarning(
@@ -77,29 +91,73 @@ namespace SST.StableRef
         public static Report ResyncAll()
         {
             var report = NewReport();
-            StableRefEditorUtility.ScanProject("Resyncing StableRef entries…", source =>
-            {
-                int entriesBefore = report.UpdatedEntries;
-                int objectsBefore = report.UpdatedObjects;
-                UnityEngine.Object changed = null;
-                foreach (var target in source.Targets)
-                    if (ResyncInto(target, ref report)) changed = target;
-                if (changed == null) return;
-
-                if (source.IsScene)
-                {
-                    EditorSceneManager.MarkSceneDirty(source.Scene);
-                }
-                else if (!StableRefEditorUtility.TrySaveAsset(changed))
-                {
-                    report.UpdatedEntries = entriesBefore;
-                    report.UpdatedObjects = objectsBefore;
-                    report.UnsavedAssets.Add(source.Path);
-                }
-            });
+            StableRefEditorUtility.ScanProject("Resyncing StableRef entries…", source => ResyncSource(source, ref report));
 
             EditorUtility.UnloadUnusedAssetsImmediate();
             return report;
+        }
+
+        /// <summary>
+        /// Resyncs the ScriptableObject assets and prefabs at <paramref name="assetPaths"/>, in the given order (list a
+        /// source prefab before its variants), and saves the changed ones the same way <see cref="ResyncAll"/> does.
+        /// For tools that rewrite a known set of files and need their entries stamped without scanning the project.
+        /// </summary>
+        public static Report ResyncAssets(IEnumerable<string> assetPaths)
+        {
+            var report = NewReport();
+            foreach (string path in assetPaths)
+            {
+                if (string.IsNullOrEmpty(path) || path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)) continue;
+                var targets = StableRefEditorUtility.LoadScanTargets(path);
+                if (targets.Count > 0)
+                    ResyncSource(new StableRefEditorUtility.ScanSource { Path = path, Targets = targets }, ref report);
+            }
+
+            EditorUtility.UnloadUnusedAssetsImmediate();
+            return report;
+        }
+
+        /// <summary>
+        /// Resyncs the targets of one scanned file or scene and saves the asset — when an entry changed, or when the
+        /// entries were already in sync in memory but the object is dirty (see <see cref="Report.SavedPendingAssets"/>).
+        /// </summary>
+        internal static void ResyncSource(StableRefEditorUtility.ScanSource source, ref Report report)
+        {
+            int entriesBefore = report.UpdatedEntries;
+            int objectsBefore = report.UpdatedObjects;
+            UnityEngine.Object changed = null;
+            UnityEngine.Object pending = null;
+            foreach (var target in source.Targets)
+            {
+                if (ResyncInto(target, ref report))
+                    changed = target;
+                // In sync in memory, but the object is dirty: the entries may have been synced (by the inspector, by
+                // an editor script) without being saved, so the file still holds the stale metadata.
+                else if (!source.IsScene && EditorUtility.IsDirty(target)
+                         && StableRefPropertyUtils.MayContainStableRef(target.GetType()))
+                    pending = target;
+            }
+
+            if (changed == null)
+            {
+                if (pending != null)
+                {
+                    if (StableRefEditorUtility.TrySaveAsset(pending)) report.SavedPendingAssets.Add(source.Path);
+                    else report.UnsavedAssets.Add(source.Path);
+                }
+                return;
+            }
+
+            if (source.IsScene)
+            {
+                EditorSceneManager.MarkSceneDirty(source.Scene);
+            }
+            else if (!StableRefEditorUtility.TrySaveAsset(changed))
+            {
+                report.UpdatedEntries = entriesBefore;
+                report.UpdatedObjects = objectsBefore;
+                report.UnsavedAssets.Add(source.Path);
+            }
         }
 
         /// <summary>
@@ -114,7 +172,12 @@ namespace SST.StableRef
             return report.UpdatedEntries;
         }
 
-        private static Report NewReport() => new() { TypesWithoutId = new HashSet<Type>(), UnsavedAssets = new List<string>() };
+        internal static Report NewReport() => new()
+        {
+            TypesWithoutId = new HashSet<Type>(),
+            UnsavedAssets = new List<string>(),
+            SavedPendingAssets = new List<string>()
+        };
 
         private static bool ResyncInto(UnityEngine.Object target, ref Report report)
         {

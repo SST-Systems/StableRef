@@ -1,5 +1,21 @@
 # StableRef
 
+## 4.2.0 - 12.10.2026
+
+### Added
+
+- **SerializeReference Migration sample** (`Samples~/SerializeReferenceMigration`, menu *Tools → StableRef → Migrate SerializeReference Data*) switches a project from plain `[SerializeReference]` fields to StableRef with one button. Doing it by hand lost the data: Unity loads the old layout into the new field as empty, keeps the reference records only in the file and drops them the first time the asset is saved. *Migrate* now:
+  - changes the type of the fields in the scripts in place — `T` → `StableRef<T>`, `T[]` / `List<T>` → `StableRefList<T>`, `[SerializeReference]` removed or, on a non-public field, replaced with `[SerializeField]` — keeping the names, so the data stays under the same keys (code that reads the fields then needs `.Value`); adds `SST.StableRef` to the assembly definitions and `[RefTypeId]` to value types without a stable ID;
+  - after the scripts compile, rewrites the assets under `Assets/` as text: the field layout in components, ScriptableObjects, nested classes and other referenced values, and the paths of prefab overrides, including overrides of objects inside nested prefabs. The reference records are kept with their IDs;
+  - reimports and resyncs the changed files, so the stable IDs and snapshots are written right away; every converted scene is opened additively, resynced and saved, and the scenes that were open — closed for the migration, since Unity would otherwise hold them in the old layout — are reopened.
+
+  Until the code that uses the fields is fixed and the scripts compile, the data waits in the old layout — also across an editor restart into the last compiled scripts; *Resume Pending Migration* / *Cancel Pending Migration* take over by hand. *Analyze (Dry Run)* lists every change without writing. Fields already retyped by hand are migrated by the data step alone. On a project with 4,600 asset files the data step takes about 7 seconds.
+- **`StableRefResync.ResyncAssets(paths)`** resyncs and saves a given set of ScriptableObject assets and prefabs, in the given order, the way *Resync All* does — for tools that rewrite known files and need their entries stamped without scanning the whole project.
+
+### Fixed
+
+- **Resync All writes entries that were already synced in memory but not saved.** It compared the entries in memory, and if the inspector or an editor script had already stamped them without saving, it found nothing to update and saved nothing: the file kept the empty or stale metadata, and every later run reported nothing to do. Now an asset whose entries are in sync but which is dirty is saved too — with any other unsaved change it holds, as a regular save would; the console lists such assets.
+
 ## 4.1.2 - 09.10.2026
 
 ### Fixed

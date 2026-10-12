@@ -1,7 +1,9 @@
+using System.Collections.Generic;
 using System.IO;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace SST.StableRef.Tests
 {
@@ -89,6 +91,31 @@ namespace SST.StableRef.Tests
 
             Assert.IsFalse(StableRefEditorUtility.TrySaveAsset(prefab.transform), "a prefab with a missing script is not saved");
             Assert.AreEqual(before, File.ReadAllText(prefabPath), "the file is left as it was");
+        }
+
+        [Test]
+        public void ResyncSource_SavesEntriesSyncedInMemoryButNotOnDisk()
+        {
+            if (!AssetDatabase.IsValidFolder(TempFolder)) AssetDatabase.CreateFolder("Assets", "__StableRefScanTestsTemp");
+
+            var holder = ScriptableObject.CreateInstance<TestHolder>();
+            holder.Ref.Value = new AlphaThing();
+            string path = TempFolder + "/Pending.asset";
+            AssetDatabase.CreateAsset(holder, path);
+            AssetDatabase.SaveAssetIfDirty(holder);
+            StringAssert.DoesNotContain("stableref-tests.alpha", File.ReadAllText(path), "written without an id");
+
+            // Synced in memory, as the inspector does, but not saved: a resync finds nothing to update.
+            Assert.Greater(StableRefResync.ResyncObject(holder), 0);
+            Assert.IsTrue(EditorUtility.IsDirty(holder));
+
+            var report = StableRefResync.NewReport();
+            var source = new StableRefEditorUtility.ScanSource { Path = path, Targets = new List<Object> { holder } };
+            StableRefResync.ResyncSource(source, ref report);
+
+            Assert.AreEqual(0, report.UpdatedEntries);
+            CollectionAssert.AreEqual(new[] { path }, report.SavedPendingAssets);
+            StringAssert.Contains("stableref-tests.alpha", File.ReadAllText(path), "the synced entry reached the file");
         }
     }
 }
