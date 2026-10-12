@@ -1,6 +1,6 @@
 {
   "name": "com.sst-systems.stableref",
-  "version": "4.1.2",
+  "version": "4.2.0",
   "displayName": "StableRef",
   "description": "Serializable polymorphic reference wrapper built on [SerializeReference] that survives class renames. Stores a stable string type ID alongside the object. Includes editor tools: searchable type selector, find-usages window, and missing-types report.",
   "unity": "2021.3",
@@ -25,6 +25,11 @@
       "displayName": "Newtonsoft.Json Converter",
       "description": "StableRefJsonConverter: StableRef<T> / StableRefList<T> fields read and write the same JSON as bare T / List<T> fields. Requires Newtonsoft.Json in the project (com.unity.nuget.newtonsoft-json or any Newtonsoft.Json.dll).",
       "path": "Samples~/NewtonsoftJson"
+    },
+    {
+      "displayName": "SerializeReference Migration",
+      "description": "Switches plain [SerializeReference] fields to StableRef<T> / StableRefList<T> with one button (Tools/StableRef/Migrate SerializeReference Data): rewrites the declarations in your scripts, then moves the saved data, rewrites prefab overrides and stamps stable IDs and snapshots.",
+      "path": "Samples~/SerializeReferenceMigration"
     }
   ]
 }

@@ -60,22 +60,11 @@ namespace SST.StableRef
                 return mapped;
             }
 
-            var searchName = type.Name;
-            int tick = searchName.IndexOf('`');
-            if (tick >= 0) searchName = searchName.Substring(0, tick);
-
-            var guids = AssetDatabase.FindAssets($"t:MonoScript {searchName}");
-
-            foreach (var guid in guids)
+            var scriptGuid = FindScriptGuid(type);
+            if (scriptGuid != null)
             {
-                var path = AssetDatabase.GUIDToAssetPath(guid);
-                var script = AssetDatabase.LoadAssetAtPath<MonoScript>(path);
-
-                if (script != null && script.GetClass() == type)
-                {
-                    Register(guid, type);
-                    return guid;
-                }
+                Register(scriptGuid, type);
+                return scriptGuid;
             }
 
             _missingTypes.Add(type);
@@ -143,6 +132,36 @@ namespace SST.StableRef
 
             _missingIds.Add(id);
             return null;
+        }
+
+        /// <summary>
+        /// GUID of the script whose <see cref="MonoScript.GetClass"/> is <paramref name="type"/> and whose file name
+        /// contains the type's name — the same answer the former per-type name search gave (Unity 6 maps a file to its
+        /// first class even when the names differ; that alone doesn't count), from one index over
+        /// every MonoScript in the project, built on first use and kept until the next domain reload (adding, removing
+        /// or editing a script reloads it). A name search per type cost milliseconds each — seconds for a selector
+        /// with many candidates — and its tokenizer missed some file names.
+        /// </summary>
+        private static string FindScriptGuid(Type type)
+        {
+            _scriptGuids ??= BuildScriptIndex();
+            return _scriptGuids.TryGetValue(type, out var guid) ? guid : null;
+        }
+
+        private static Dictionary<Type, string> _scriptGuids;
+
+        private static Dictionary<Type, string> BuildScriptIndex()
+        {
+            var index = new Dictionary<Type, string>();
+            foreach (var guid in AssetDatabase.FindAssets("t:MonoScript"))
+            {
+                var script = AssetDatabase.LoadAssetAtPath<MonoScript>(AssetDatabase.GUIDToAssetPath(guid));
+                var type = script != null ? script.GetClass() : null;
+                if (type == null || index.ContainsKey(type)) continue;
+                if (script.name.IndexOf(StableRefGenericUtils.DisplayName(type), StringComparison.OrdinalIgnoreCase) >= 0)
+                    index[type] = guid;
+            }
+            return index;
         }
 
         /// <summary>

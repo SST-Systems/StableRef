@@ -1,0 +1,19 @@
+{
+    "name": "SST.StableRef.Migration.Editor",
+    "rootNamespace": "SST.StableRef.Migration",
+    "references": [
+        "SST.StableRef",
+        "SST.StableRef.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

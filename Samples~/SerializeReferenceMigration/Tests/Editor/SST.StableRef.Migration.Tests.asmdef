@@ -1,0 +1,27 @@
+{
+    "name": "SST.StableRef.Migration.Tests",
+    "rootNamespace": "SST.StableRef.Tests",
+    "references": [
+        "SST.StableRef",
+        "SST.StableRef.Editor",
+        "SST.StableRef.Migration.Editor",
+        "SST.StableRef.Migration.TestTypes",
+        "UnityEngine.TestRunner",
+        "UnityEditor.TestRunner"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "nunit.framework.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

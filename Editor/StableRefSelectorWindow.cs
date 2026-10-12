@@ -77,6 +77,7 @@ namespace SST.StableRef
 
         private static readonly GUIContent _tempContent = new();
         private static readonly GUIContent _rowContent = new();
+        private static readonly Dictionary<string, float> _labelWidths = new(StringComparer.Ordinal);
 
         private struct RowItem
         {
@@ -272,15 +273,15 @@ namespace SST.StableRef
                 needV ? GUI.skin.verticalScrollbar : GUIStyle.none);
 
             int clicked = -1;
-            float y = listY;
             var mp = Event.current.mousePosition;
             Type currentType = _currentType;
 
-            for (int i = 0; i < _rows.Count; i++)
+            int first = Mathf.Max(0, Mathf.FloorToInt(_scroll.y / RowH));
+            int last = Mathf.Min(_rows.Count - 1, Mathf.CeilToInt((_scroll.y + availH) / RowH));
+            for (int i = first; i <= last; i++)
             {
                 var row = _rows[i];
-                DrawRow(ref row, i, new Rect(0, y, contentW, RowH), mp, currentType, ref clicked);
-                y += RowH;
+                DrawRow(ref row, i, new Rect(0, listY + i * RowH, contentW, RowH), mp, currentType, ref clicked);
             }
 
             GUI.EndScrollView();
@@ -709,6 +710,12 @@ namespace SST.StableRef
                     }
                 }
 
+                var parentCats = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var cat in byCat.Keys)
+                    for (int s = cat.IndexOf('/'); s >= 0; s = cat.IndexOf('/', s + 1))
+                        parentCats.Add(cat.Substring(0, s));
+
+                var headers = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var (cat, list) in byCat)
                 {
                     string[] segs = cat.Split('/');
@@ -719,8 +726,7 @@ namespace SST.StableRef
                         if (parentCollapsed) break;
                         string segPath = d == 0 ? segs[0] : cat.Substring(0, IndexOfNthSlash(cat, d + 1));
 
-                        bool dup = _rows.Exists(r => r.IsHeader && r.CategoryPath == segPath);
-                        if (!dup)
+                        if (headers.Add(segPath))
                             _rows.Add(new RowItem { IsHeader = true, Label = segs[d], Depth = d, CategoryPath = segPath });
 
                         if (_collapsed.Contains(segPath)) parentCollapsed = true;
@@ -728,12 +734,7 @@ namespace SST.StableRef
 
                     if (!parentCollapsed && !_collapsed.Contains(cat))
                     {
-                        bool hasSubcategories = false;
-                        foreach (var otherCat in byCat.Keys)
-                            if (otherCat != cat && otherCat.StartsWith(cat + "/"))
-                            { hasSubcategories = true; break; }
-
-                        if (hasSubcategories)
+                        if (parentCats.Contains(cat))
                         {
                             _pendingDirectItems[cat] = (list, segs.Length);
                         }
@@ -767,11 +768,18 @@ namespace SST.StableRef
             for (int i = 0; i < _rows.Count; i++)
             {
                 _contentH += RowH;
-                _tempContent.text = _rows[i].Label;
                 float textX = _rows[i].IsHeader ? 6f + _rows[i].Depth * Indent + 14f : TextX + _rows[i].Depth * Indent;
-                float w = textX + EditorStyles.label.CalcSize(_tempContent).x + 4f;
+                float w = textX + LabelWidth(_rows[i].Label) + 4f;
                 if (w > _contentW) _contentW = w;
             }
+        }
+
+        private static float LabelWidth(string label)
+        {
+            if (_labelWidths.TryGetValue(label, out var w)) return w;
+            if (_labelWidths.Count > 4096) _labelWidths.Clear();
+            _tempContent.text = label;
+            return _labelWidths[label] = EditorStyles.label.CalcSize(_tempContent).x;
         }
 
         private void CollapseRecursive(string root)

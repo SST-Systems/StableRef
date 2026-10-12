@@ -1,5 +1,23 @@
 # StableRef
 
+## 4.2.0 - 12.10.2026
+
+### Added
+
+- **SerializeReference Migration sample** (`Samples~/SerializeReferenceMigration`, menu *Tools → StableRef → Migrate SerializeReference Data*) switches a project from plain `[SerializeReference]` fields to StableRef with one button. Doing it by hand lost the data: Unity loads the old layout into the new field as empty, keeps the reference records only in the file and drops them the first time the asset is saved. *Migrate* now:
+  - changes the type of the fields in the scripts in place — `T` → `StableRef<T>`, `T[]` / `List<T>` → `StableRefList<T>`, `[SerializeReference]` removed or, on a non-public field, replaced with `[SerializeField]` — keeping the names, so the data stays under the same keys (code that reads the fields then needs `.Value`); adds `SST.StableRef` to the assembly definitions and `[RefTypeId]` to value types without a stable ID;
+  - after the scripts compile, rewrites the assets under `Assets/` as text: the field layout in components, ScriptableObjects, nested classes and other referenced values, and the paths of prefab overrides, including overrides of objects inside nested prefabs. The reference records are kept with their IDs;
+  - reimports and resyncs the changed files, so the stable IDs and snapshots are written right away; every converted scene is opened additively, resynced and saved, and the scenes that were open — closed for the migration, since Unity would otherwise hold them in the old layout — are reopened.
+
+  Until the code that uses the fields is fixed and the scripts compile, the data waits in the old layout — also across an editor restart into the last compiled scripts; *Resume Pending Migration* / *Cancel Pending Migration* take over by hand. *Analyze (Dry Run)* lists every change without writing. Fields already retyped by hand are migrated by the data step alone. On a project with 4,600 asset files the data step takes about 7 seconds.
+- **`StableRefResync.ResyncAssets(paths)`** resyncs and saves a given set of ScriptableObject assets and prefabs, in the given order, the way *Resync All* does — for tools that rewrite known files and need their entries stamped without scanning the whole project.
+- **`StableRefJson.DataEquals(a, b, settings)` in the Newtonsoft.Json Converter sample** compares the data of two objects at runtime, to apply a config from the server only when it changed. Stable IDs and snapshots can't serve for this: they are editor-only, stripped from players, and JSON from a server has none. Both objects are serialized with your settings and the JSON trees compared; a value of another type inside a StableRef counts as a change even when both types write the same members (`TypeNameHandling.None` is compared as `Auto`).
+
+### Fixed
+
+- **Resync All writes entries that were already synced in memory but not saved.** It compared the entries in memory, and if the inspector or an editor script had already stamped them without saving, it found nothing to update and saved nothing: the file kept the empty or stale metadata, and every later run reported nothing to do. Now an asset whose entries are in sync but which is dirty is saved too — with any other unsaved change it holds, as a regular save would; the console lists such assets.
+- **The type selector opens fast the first time after a recompile.** Each candidate type without `[RefTypeId]` was looked up with its own `AssetDatabase.FindAssets` name search — milliseconds per type, so a field whose base type has hundreds of implementations took seconds to open after every domain reload. The script GUIDs now come from one index of all MonoScripts built on first use (about 40 ms for 3,000 scripts); it gives the same IDs as before (checked on 11,000 types). The selector also draws only the rows in view and filters / regroups them without quadratic lookups, so typing in a long list stays responsive.
+
 ## 4.1.2 - 09.10.2026
 
 ### Fixed

@@ -21,6 +21,12 @@ namespace SST.StableRef.Tests
             public int Slow = 2;
         }
 
+        /// <summary>Serializes exactly like <see cref="Fire"/> without type names.</summary>
+        public class Burn : IJsonThing
+        {
+            public int Damage = 5;
+        }
+
         /// <summary>A value whose members happen to share names with the wrapper's.</summary>
         public class Tagged : IJsonThing
         {
@@ -222,6 +228,70 @@ namespace SST.StableRef.Tests
             Assert.NotNull(tagged);
             Assert.AreEqual(1, tagged.Value);
             Assert.AreEqual(2, tagged.Extra);
+        }
+
+        [Test]
+        public void DataEquals_ComparesValuesNotInstancesOrMetadata()
+        {
+            WrappedConfig Make() => new()
+            {
+                Effect = new StableRef<IJsonThing>(new Fire { Damage = 7 }),
+                Effects = { new Ice(), null, new Fire() }
+            };
+
+            var a = Make();
+            var b = Make();
+            b.Effect.TypeId = "metadata is not data";
+            Assert.IsTrue(StableRefJson.DataEquals(a, b));
+            Assert.IsTrue(StableRefJson.DataEquals(a, b, Auto()));
+            Assert.IsTrue(StableRefJson.DataEquals(null, null));
+            Assert.IsFalse(StableRefJson.DataEquals(a, null));
+            Assert.IsFalse(StableRefJson.DataEquals(a, new BareConfig()), "different root types");
+
+            ((Fire)b.Effect.Value).Damage = 8;
+            Assert.IsFalse(StableRefJson.DataEquals(a, b), "value field");
+
+            b = Make();
+            b.Effects.RemoveAt(1);
+            Assert.IsFalse(StableRefJson.DataEquals(a, b), "list length");
+
+            b = Make();
+            b.Effects[0] = b.Effects[2];
+            b.Effects[2] = new Ice();
+            Assert.IsFalse(StableRefJson.DataEquals(a, b), "list order");
+        }
+
+        [Test]
+        public void DataEquals_SeesTypeChangeEvenWithoutTypeNames()
+        {
+            var a = new WrappedConfig { Effect = new StableRef<IJsonThing>(new Fire()) };
+            var b = new WrappedConfig { Effect = new StableRef<IJsonThing>(new Burn()) };
+
+            var none = new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.None };
+            none.Converters.Add(new StableRefJsonConverter());
+            Assert.AreEqual(JsonConvert.SerializeObject(a, none), JsonConvert.SerializeObject(b, none),
+                "same JSON without type names");
+
+            Assert.IsFalse(StableRefJson.DataEquals(a, b));
+            Assert.IsFalse(StableRefJson.DataEquals(a, b, none));
+            Assert.IsTrue(StableRefJson.DataEquals(a, b, JsonSerializer.Create(none)), "a given serializer is used as is");
+            Assert.IsFalse(StableRefJson.DataEquals(a, b, JsonSerializer.Create(Auto())));
+        }
+
+        [Test]
+        public void DataEquals_AppliesServerDataOnlyWhenChanged()
+        {
+            var settings = Auto();
+            var current = new WrappedConfig { Effect = new StableRef<IJsonThing>(new Fire { Damage = 7 }), Effects = { new Ice() } };
+
+            string same = "{\"effect\":{\"$type\":\"" + Name<Fire>() + "\",\"Damage\":7},"
+                + "\"Effects\":[{\"$type\":\"" + Name<Ice>() + "\",\"Slow\":2}],\"Unknown\":1}";
+            var incoming = JsonConvert.DeserializeObject<WrappedConfig>(same, settings);
+            Assert.IsTrue(StableRefJson.DataEquals(current, incoming, settings), "extra members in the payload don't count");
+
+            string changed = same.Replace("\"Slow\":2", "\"Slow\":3");
+            incoming = JsonConvert.DeserializeObject<WrappedConfig>(changed, settings);
+            Assert.IsFalse(StableRefJson.DataEquals(current, incoming, settings));
         }
 
         private static string Name<T>() => $"{typeof(T).FullName}, {typeof(T).Assembly.GetName().Name}";
