@@ -6,6 +6,11 @@ This sample switches a project from plain `[SerializeReference]` fields to Stabl
 with one button. It rewrites the field declarations in your scripts, waits for them to compile, moves the data of
 every asset into the new layout, follows prefab overrides and stamps every entry's stable ID and snapshot.
 
+> **It is a migration helper, not a guarantee.** The code that uses the fields is fixed as text, by rules: a `.Value`
+> can be missed or put where it doesn't belong, and some such places still compile — a check like `effect != null`
+> silently tests the wrapper instead of the value, and the game behaves differently without any error. Review every
+> changed script in version control before committing, go through the warnings in the console, and test the game.
+
 ```csharp
 // before
 [SerializeReference, Tooltip("On hit")] public IEffect effect = new Burn();
@@ -45,6 +50,7 @@ It ships as a sample rather than as part of the package: it is needed once per p
 2. Import the sample: **Window → Package Manager → StableRef → Samples → SerializeReference Migration → Import**. If you installed StableRef by copying it into `Assets/`, copy the `Samples~/SerializeReferenceMigration` folder from the repository instead.
 3. **Tools → StableRef → Migrate SerializeReference Data → Analyze (Dry Run)** lists the fields that will be rewritten, the uses that would test the wrapper and will get `.Value`, the `[RefTypeId]` and assembly references that will be added, and warnings. Nothing is written.
 4. **Tools → StableRef → Migrate SerializeReference Data → Migrate…** You are asked to save modified scenes; open scenes are closed for the migration. The field types in the scripts are changed and Unity recompiles; the code that uses the fields is fixed by the compiler's messages, round after round. Once the scripts compile, the data is moved, every converted scene is opened, resynced and saved, and the scenes you had open are reopened. The report goes to the console.
+5. **Review the changes before committing.** Go through the diff of every changed script: each added `.Value`, `.Set(…)`, `new(…)`, `.ToArray()` — and the uses of the retyped fields the migration didn't touch (search the field names). Check the warnings in the report: they are the places it couldn't decide on. A missed or misplaced `.Value` may still compile and only show up as wrong behaviour at runtime.
 
 The compile errors after the rewrite are the code that uses the fields. After each compile the migration fixes the ones it can read — reading a single reference gets `.Value`, assigning one `.Set(value)` (`.Value =` when the value spans several lines), an object-initializer member `= new(value)`, a list's `.Length` becomes `.Count`, a list read as an array `.ToArray()` — and recompiles, until the scripts compile or a round fixes nothing. Each round also reaches the assemblies that depend on the fixed ones (they aren't compiled while their dependencies fail). An assembly definition under `Assets/` that now touches a StableRef type without referencing `SST.StableRef` (`CS0012`) gets the reference. What is left is listed in the console — fix it by hand. Until then the old types stay loaded and the data stays readable; the data step runs by itself after the next successful compile, once the rewritten scripts are loaded (an editor started with compile errors and *Ignore* in the Safe Mode dialog runs the old scripts, so the data keeps waiting). A field you changed back by hand doesn't hold it up: its data is left as is and the report lists it. **Resume Pending Migration** in the same menu runs the data step right away, **Cancel Pending Migration** stops waiting.
 
