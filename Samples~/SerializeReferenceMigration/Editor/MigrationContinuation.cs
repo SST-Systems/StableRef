@@ -2,7 +2,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEngine;
 
 namespace SST.StableRef.Migration
@@ -14,9 +16,17 @@ namespace SST.StableRef.Migration
     /// readable, and the migration waits for the next successful compile.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The data step runs only once the rewritten scripts are loaded (<see cref="AreRewrittenScriptsLoaded"/>): an editor
     /// started with compile errors (Safe Mode → Ignore) loads the last assemblies that compiled, in which the fields are
     /// still plain <c>[SerializeReference]</c>, and a run there would find nothing to convert and end the migration.
+    /// </para>
+    /// <para>
+    /// While it waits, every compile's messages go to <see cref="MigrationCodeRewriter.FixCompilerMessages"/>: the code
+    /// that uses the retyped fields is fixed by what the compiler reports, and the scripts recompile, round after round
+    /// (each round reaches the assemblies that depend on the ones fixed before), until they compile or a round fixes
+    /// nothing — what is left is listed for a manual fix.
+    /// </para>
     /// </remarks>
     [InitializeOnLoad]
     public static class MigrationContinuation
@@ -27,27 +37,79 @@ namespace SST.StableRef.Migration
             public MigrationScenes.State Scenes = new();
             public string CodeSummary;
             public List<string> ExpectedFields = new();
+            public List<string> FieldNames = new();
+            /// <summary>Uses fixed by compiler messages so far.</summary>
+            public List<string> FixedUses = new();
+            public int FixRounds;
+            /// <summary>Uses were fixed after a successful compile: the data waits for one more.</summary>
+            public bool AwaitRecompile;
         }
 
         private const string PendingPath = "Library/StableRefMigration.pending.json";
         private const string MenuRoot = "Tools/StableRef/Migrate SerializeReference Data/";
+        private const int MaxFixRounds = 30;
+        private static readonly string[] CodeRoots = { "Assets" };
+
+        /// <summary>Messages of the compile in progress; a failed compile keeps this domain, a successful one reloads it.</summary>
+        private static readonly List<CompilerMessage> _messages = new();
 
         static MigrationContinuation()
         {
+            CompilationPipeline.compilationStarted += _ => _messages.Clear();
+            CompilationPipeline.assemblyCompilationFinished += (_, messages) => { if (IsPending) _messages.AddRange(messages); };
+            CompilationPipeline.compilationFinished += _ => FixUses();
             if (File.Exists(PendingPath)) EditorApplication.delayCall += () => Continue(force: false);
         }
 
         /// <summary>Whether the code was rewritten and the data still waits for a successful compile.</summary>
         public static bool IsPending => File.Exists(PendingPath);
 
-        /// <summary>Closes the open scenes and remembers them, with the fields the data step waits for.</summary>
-        public static bool Begin(string codeSummary, List<string> expectedFields)
+        /// <summary>
+        /// Closes the open scenes and remembers them, with the fields the data step waits for and their names in code
+        /// (to fix their uses by compiler messages).
+        /// </summary>
+        public static bool Begin(string codeSummary, List<string> expectedFields, List<string> fieldNames)
         {
             var scenes = MigrationScenes.Close();
             if (scenes == null) return false;
-            var pending = new Pending { Scenes = scenes, CodeSummary = codeSummary, ExpectedFields = expectedFields };
-            File.WriteAllText(PendingPath, JsonUtility.ToJson(pending, true));
+            Save(new Pending { Scenes = scenes, CodeSummary = codeSummary, ExpectedFields = expectedFields, FieldNames = fieldNames });
             return true;
+        }
+
+        /// <summary>
+        /// After a compile, fixes the uses of the retyped fields the compiler reported. With errors the domain stays and
+        /// the scripts are refreshed right away; after a successful compile the fixes (warnings only) wait for the reload,
+        /// and <see cref="Continue"/> recompiles before moving the data.
+        /// </summary>
+        private static void FixUses()
+        {
+            if (!IsPending || _messages.Count == 0) return;
+            var messages = _messages.ToList();
+            _messages.Clear();
+            bool failed = messages.Any(m => m.type == CompilerMessageType.Error);
+
+            var pending = Load();
+            var changes = new List<string>();
+            var unfixed = new List<string>();
+            int written = pending.FixRounds < MaxFixRounds
+                ? MigrationCodeRewriter.FixCompilerMessages(messages, pending.FieldNames, CodeRoots, changes, unfixed)
+                : 0;
+
+            if (written == 0)
+            {
+                if (failed && unfixed.Count > 0)
+                    Debug.LogWarning($"[StableRef] Migration: {unfixed.Count} place(s) that use the retyped fields need a manual fix " +
+                                     "(the data waits for the scripts to compile):\n  " + string.Join("\n  ", unfixed.Distinct()));
+                return;
+            }
+
+            pending.FixRounds++;
+            pending.FixedUses.AddRange(changes);
+            pending.AwaitRecompile |= !failed;
+            Save(pending);
+            Debug.Log($"[StableRef] Migration: fixed {changes.Count} use(s) of the retyped fields by the compiler messages " +
+                      $"(round {pending.FixRounds}), recompiling:\n  " + string.Join("\n  ", changes));
+            if (failed) EditorApplication.delayCall += AssetDatabase.Refresh;
         }
 
         /// <summary>
@@ -112,6 +174,18 @@ namespace SST.StableRef.Migration
             if (!File.Exists(PendingPath)) return;
 
             var pending = Load();
+            if (pending.AwaitRecompile && !force)
+            {
+                pending.AwaitRecompile = false;
+                Save(pending);
+                AssetDatabase.Refresh();
+                // A recompile reloads the domain and runs this again; without one the data step goes on below.
+                if (EditorApplication.isCompiling)
+                {
+                    EditorApplication.delayCall += () => Continue(force: false);
+                    return;
+                }
+            }
             var missing = MissingFields(pending.ExpectedFields);
             if (!force && !AreRewrittenScriptsLoaded(pending.ExpectedFields, missing))
             {
@@ -151,6 +225,8 @@ namespace SST.StableRef.Migration
                 report.Warnings.Add("These rewritten fields are not StableRef in the compiled scripts, their data was not " +
                                     "moved (run Migrate… again once they are):\n    " + string.Join("\n    ", missing));
             report.CodeSummary = pending.CodeSummary;
+            if (pending.FixedUses.Count > 0)
+                report.CodeSummary += $"\nFixed by the compiler messages ({pending.FixedUses.Count}):\n  " + string.Join("\n  ", pending.FixedUses);
             SerializeReferenceMigrator.Log(report);
         }
 
@@ -162,6 +238,8 @@ namespace SST.StableRef.Migration
         /// </summary>
         public static bool AreRewrittenScriptsLoaded(ICollection<string> expectedFields, ICollection<string> missing) =>
             !EditorUtility.scriptCompilationFailed && (expectedFields.Count == 0 || missing.Count < expectedFields.Count);
+
+        private static void Save(Pending pending) => File.WriteAllText(PendingPath, JsonUtility.ToJson(pending, true));
 
         private static Pending Load()
         {

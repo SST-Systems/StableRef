@@ -1,5 +1,20 @@
 # StableRef
 
+## 4.2.1 - 13.10.2026
+
+### Added
+
+- **The SerializeReference Migration sample fixes the code that uses the retyped fields.** On a real project the "one button" stopped at hundreds of compile errors, fixed by hand one by one, and at code that compiled but now did something else. Now:
+  - after each compile while the data waits, the errors about a `StableRef<T>` / `StableRefList<T>` are fixed as text and the scripts recompile, round after round, until they compile or a round fixes nothing (each round reaches the assemblies that depend on the fixed ones). A read gets `.Value`, an assignment `.Set(value)` (`.Value =` for a value over several lines, `new(value)` in an object initializer — multi-line values there are left alone), `.Length` of a list becomes `.Count`, a list read as an array `.ToArray()`. Where the compiler reports something other than the expression is handled: a conditional is reported at its condition (only the branches that are the field get `.Value`), a pattern of `is` / `switch` at the pattern (the subject before `is`, inside `switch ( )` or before `switch` gets it), `x?.M` at the dot. Localized compiler messages are read too; what can't be fixed is listed in the console;
+  - uses the compiler accepts but that now test or read the wrapper get `.Value` before the first compile: `field != null`, `null == field`, `field is null` / `is { }` / `is T`, `field as T`, `field = null`, `ReferenceEquals(field, …)`, `field.GetType()`, `field.Equals(…)`, and `field.Value` / `field.HasValue` when the value type has its own member of that name — `field.Value` would silently become the wrapper's value instead of the value's `Value`. Only uses where the name surely means the field are changed (the declaring class's scripts without a local of that name, or a name no other field or property has); the others are listed as warnings;
+  - an assembly definition under `Assets/` whose code now touches a StableRef type without referencing `SST.StableRef` (`CS0012`) gets the reference; *Analyze* lists the assembly definitions that reference an assembly with StableRef types in its public API — a package's, or one with retyped public fields — but not `SST.StableRef`.
+- **`StableRefTypeRegistry.TryGetId(type, out id)`** resolves a stable id like `GetOrAssignId` without logging a warning for a type that has none — for tools that only check which types need one.
+
+### Fixed
+
+- **The migration retypes a field marked `[field: SerializeReference]`.** The `field:` target was taken as "auto-property only", so on a plain field such a declaration wasn't recognized and was reported as "declaration not found (only one-line declarations are supported)". On a field the target changes nothing and is accepted either way (on an auto-property it is still required); the other attributes keep their `field:` target. A declaration that is found but whose `[SerializeReference]` isn't recognized is now reported as such, with its attributes, instead of as a missing declaration.
+- ***Analyze (Dry Run)* of the migration no longer floods the console with "has no stable ID".** It checked every possible value type through `GetOrAssignId`, which warns for each type without an id — the very types the migration is about to give a `[RefTypeId]`. It uses `TryGetId` now; the warning is still logged once per type when an entry actually needs the id.
+
 ## 4.2.0 - 12.10.2026
 
 ### Added

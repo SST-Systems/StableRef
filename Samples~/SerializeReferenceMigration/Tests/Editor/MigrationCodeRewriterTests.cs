@@ -138,6 +138,30 @@ namespace SST.StableRef.Tests
         }
 
         [Test]
+        public void FieldWithFieldTarget_IsRetyped()
+        {
+            CollectionAssert.AreEqual(
+                new[] { "[field: ParseField(\"x\")] public StableRefList<IFoo> Items = new();" },
+                Rewrite("Items", false, true, "[field: SerializeReference, ParseField(\"x\")] public List<IFoo> Items;"),
+                "on a field the field: target changes nothing");
+            CollectionAssert.AreEqual(
+                new[] { "[field: SerializeField, ParseField(\"x\")] private StableRef<IFoo> item;" },
+                Rewrite("item", "[field: SerializeReference, ParseField(\"x\")] private IFoo item;"));
+        }
+
+        [Test]
+        public void UnrecognizedAttribute_IsReported_NotTakenForAMissingDeclaration()
+        {
+            var lines = new List<string> { "[SerializeReference] public IFoo Prop { get; set; }" };
+            Assert.IsFalse(MigrationCodeRewriter.TryRewriteDeclaration(lines, "Prop", true, false, out _, out string problem));
+            StringAssert.Contains("isn't recognized: '[SerializeReference]'", problem, "a property needs the field: target");
+
+            Assert.IsFalse(MigrationCodeRewriter.TryRewriteDeclaration(new List<string> { "public IFoo Other;" }, "Missing", false, false,
+                out _, out problem));
+            StringAssert.StartsWith("declaration not found", problem);
+        }
+
+        [Test]
         public void Initializer_IsAddedOnlyWhereUnityWouldLeaveTheFieldNull()
         {
             Assert.IsTrue(MigrationCodeRewriter.NeedsInitializer(typeof(Candidate)), "a plain class made with new");

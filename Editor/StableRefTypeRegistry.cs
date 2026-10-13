@@ -19,25 +19,42 @@ namespace SST.StableRef
 
         private static readonly HashSet<string> _missingIds = new();
         private static readonly HashSet<Type> _missingTypes = new();
+        private static readonly HashSet<Type> _warnedTypes = new();
 
-        public static string GetOrAssignId(Type type)
+        public static string GetOrAssignId(Type type) => Resolve(type, warn: true);
+
+        /// <summary>
+        /// The stable id of <paramref name="type"/>, resolved as <see cref="GetOrAssignId"/> does, but without the
+        /// warning it logs for a type that has none — for tools that only check which types need one.
+        /// </summary>
+        public static bool TryGetId(Type type, out string id)
+        {
+            id = Resolve(type, warn: false);
+            return id != null;
+        }
+
+        private static string Resolve(Type type, bool warn)
         {
             if (type == null) return null;
 
             if (_typeToId.TryGetValue(type, out var cached)) return cached;
 
-            if (_missingTypes.Contains(type)) return null;
+            if (_missingTypes.Contains(type))
+            {
+                if (warn) WarnNoId(type);
+                return null;
+            }
 
             if (type.IsGenericType && !type.IsGenericTypeDefinition)
             {
-                var defId = GetOrAssignId(type.GetGenericTypeDefinition());
+                var defId = Resolve(type.GetGenericTypeDefinition(), warn);
                 if (defId == null) { _missingTypes.Add(type); return null; }
 
                 var args = type.GetGenericArguments();
                 var argIds = new string[args.Length];
                 for (int i = 0; i < args.Length; i++)
                 {
-                    argIds[i] = GetOrAssignId(args[i]);
+                    argIds[i] = Resolve(args[i], warn);
                     if (argIds[i] == null) { _missingTypes.Add(type); return null; }
                 }
 
@@ -68,10 +85,18 @@ namespace SST.StableRef
             }
 
             _missingTypes.Add(type);
+            if (warn) WarnNoId(type);
+            return null;
+        }
+
+        /// <summary>Logs once per type that it has no stable id.</summary>
+        private static void WarnNoId(Type type)
+        {
+            if (type.IsGenericType && !type.IsGenericTypeDefinition) return;
+            if (!_warnedTypes.Add(type)) return;
             Debug.LogWarning(
                 $"[StableRef] '{type.FullName}' has no stable ID: add [RefTypeId], move it to its own file, or map it " +
                 "with [assembly: RefTypeIdFor(...)].");
-            return null;
         }
 
         public static Type GetType(string id)
