@@ -670,13 +670,14 @@ namespace SST.StableRef.Migration
             }
 
             var unique = UniqueNames(retyped);
-            var byName = new Dictionary<string, (bool IsList, HashSet<string> Shared)>(StringComparer.Ordinal);
+            var model = new MigrationTypeModel(retyped.Where(r => !r.IsList).Select(r => (r.Field.DeclaringType, r.Name)));
+            var byName = new Dictionary<string, (bool IsList, bool AlsoSingle, HashSet<string> Shared)>(StringComparer.Ordinal);
             foreach (var group in retyped.GroupBy(r => r.Name))
             {
                 // A name that is a list anywhere is left alone: its single-reference uses can't be told apart.
                 var shared = new HashSet<string>(group.Where(r => !r.IsList)
                     .SelectMany(r => SharedMembers(ValueType(r.Field.FieldType, out _))), StringComparer.Ordinal);
-                byName[group.Key] = (group.Any(r => r.IsList), shared);
+                byName[group.Key] = (group.Any(r => r.IsList), group.Any(r => !r.IsList), shared);
             }
 
             foreach (string root in roots)
@@ -693,7 +694,7 @@ namespace SST.StableRef.Migration
                         if (text.IndexOf(pair.Key, StringComparison.Ordinal) < 0) continue;
                         fields[pair.Key] = new MigrationUsageFixer.Field
                         {
-                            Name = pair.Key, IsList = pair.Value.IsList, SharedMembers = pair.Value.Shared,
+                            Name = pair.Key, IsList = pair.Value.IsList, AlsoSingle = pair.Value.AlsoSingle, SharedMembers = pair.Value.Shared,
                             OwnFile = own != null && own.Contains(pair.Key), UniqueName = unique.Contains(pair.Key)
                         };
                     }
@@ -701,7 +702,7 @@ namespace SST.StableRef.Migration
 
                     var changes = new List<string>();
                     var review = new List<string>();
-                    string updated = MigrationUsageFixer.FixSilentUses(text, fields, changes, review);
+                    string updated = MigrationUsageFixer.FixSilentUses(text, fields, changes, review, model);
                     if (!ReferenceEquals(updated, text)) result.Files[path] = updated;
                     result.FixedUses += changes.Count;
                     result.Changes.AddRange(changes.Select(c => path + c));

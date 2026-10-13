@@ -1,5 +1,13 @@
 # StableRef
 
+## 4.2.2 - 13.10.2026
+
+### Added
+
+- **The SerializeReference Migration sample tells a retyped field from another of the same name by the type of what precedes it.** The silent uses (`!= null`, `is`…) were fixed only by name: `x.effect` in another script counted as the field only when no other type had a member called `effect`, and an unqualified `effect` only in the declaring class's scripts and only when the file had no local of that name anywhere. On a real project that left most uses as warnings to check by hand, and a parameter of the same name in one method blocked the whole file. Now `MigrationTypeModel` reads the type of the receiver from the code — declarations, `var` initializers (a chain, `new`, `as`, a cast), `foreach` elements, deconstructions, LINQ lambda parameters, members and calls along a chain (base classes and generic bases included), static types — and checks it against the loaded (still old) types: the use is fixed only when that type declares the retyped field, and fields of the same name in other types are left alone. A local or parameter of the same name hides the field in its own scope only. Where the type can't be read, the former rule applies.
+- **More silent uses are fixed:** `x == other` / `other != x`, `x ?? other`, `x switch { … }`, `switch (x)`, `x.GetHashCode()`, `x` passed to a parameter of type `object` or a type parameter (methods and constructors; a call whose parameter can't be found is listed), and the same uses of a local the wrapper was put in (`var r = o.effect; if (r == null)`).
+- **More compile errors are fixed:** a property pattern on a wrapper (`x is { Power: > 0 }`, `CS0117`) gets `.Value` on its subject, `{ Length: … }` of a list becomes `{ Count: … }`; a conditional converting a list to an array or `List<T>` as a whole (reported at its condition) converts its branches.
+
 ## 4.2.1 - 13.10.2026
 
 ### Added
