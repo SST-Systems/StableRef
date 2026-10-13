@@ -338,12 +338,12 @@ namespace SST.StableRef.Migration
         private static bool TargetsField(bool fieldTarget, bool isProperty) => !isProperty || fieldTarget;
 
         /// <summary>
-        /// Whether a retyped field of <paramref name="owner"/> needs <c>= new()</c>: a plain class created with
-        /// <c>new</c> would leave the wrapper null. Unity creates it for components and ScriptableObjects, and a struct
-        /// can't have field initializers in C# 9.
+        /// Whether a retyped field of <paramref name="owner"/> needs <c>= new()</c>: every class does — a plain class
+        /// created with <c>new</c>, and a component or ScriptableObject made in code (<c>CreateInstance</c>,
+        /// <c>AddComponent</c>) and used before Unity serializes it, would leave the wrapper null. For a loaded asset
+        /// Unity overwrites the field anyway. A struct can't have field initializers in C# 9.
         /// </summary>
-        public static bool NeedsInitializer(Type owner) =>
-            owner != null && !owner.IsValueType && !typeof(UnityEngine.Object).IsAssignableFrom(owner);
+        public static bool NeedsInitializer(Type owner) => owner != null && !owner.IsValueType;
 
         /// <summary>
         /// Replaces the type of a declaration matched by the field / property regex, wraps its initializer, or adds
