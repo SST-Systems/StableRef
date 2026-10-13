@@ -44,7 +44,10 @@ namespace SST.StableRef.Migration
         {
             /// <summary>The name used in code (the property's name for an auto-property).</summary>
             public string Name;
+            /// <summary>A field of this name is a list (somewhere).</summary>
             public bool IsList;
+            /// <summary>A field of this name is a single reference too: a list elsewhere doesn't rule a use out.</summary>
+            public bool AlsoSingle;
             /// <summary>Unqualified uses (<c>name</c>, <c>this.name</c>) in this file are this field.</summary>
             public bool OwnFile;
             /// <summary>No other member in the project has this name: qualified uses (<c>x.name</c>) are this field.</summary>
@@ -66,7 +69,7 @@ namespace SST.StableRef.Migration
         /// <summary>The diagnostics <see cref="FixDiagnostics"/> knows; others are never touched.</summary>
         public static readonly HashSet<string> HandledCodes = new(StringComparer.Ordinal)
         {
-            "CS1061", "CS0029", "CS0266", "CS1503", "CS0030", "CS0039", "CS1579", "CS0173", "CS8121", "CS0019", "CS0184"
+            "CS1061", "CS0117", "CS0029", "CS0266", "CS1503", "CS0030", "CS0039", "CS1579", "CS0173", "CS8121", "CS0019", "CS0184"
         };
 
         private const string ValueSuffix = ".Value";
@@ -132,6 +135,22 @@ namespace SST.StableRef.Migration
                     else Add(edits, offset, 0, "Value.");
                     return true;
                 }
+                case "CS0117":
+                {
+                    // 'StableRef<T>' does not contain a definition for 'Member' — a property pattern
+                    // (`x is { Member: … }`), reported at the member's name.
+                    if (quoted.Count < 2 || WordAt(m, offset) != quoted[1]) return false;
+                    var kind = WrapperKind(quoted[0]);
+                    if (kind == Kind.List)
+                    {
+                        if (quoted[1] != "Length") return false;
+                        Add(edits, offset, quoted[1].Length, "Count");
+                        return true;
+                    }
+                    if (kind != Kind.Single) return false;
+                    int brace = UnmatchedOpen(m, offset);
+                    return brace >= 0 && m[brace] == '{' && FixPatternSubject(m, brace, edits);
+                }
                 case "CS0029":
                 case "CS0266":
                 case "CS1503":
@@ -161,11 +180,26 @@ namespace SST.StableRef.Migration
                         bool array = target.EndsWith("[]", StringComparison.Ordinal);
                         bool list = target.StartsWith("List<", StringComparison.Ordinal);
                         if (!array && !list) return false;
+                        string conversion = array ? ".ToArray()" : ".ToList()";
+                        if (SplitConditional(m, offset, out int question, out int colon, out int conditionalEnd))
+                        {
+                            // `cond ? o.items : null` converted as a whole — reported at the condition: the branches convert.
+                            bool converted = false;
+                            foreach (var (branchStart, branchEnd) in new[] { (question + 1, colon), (colon + 1, conditionalEnd) })
+                            {
+                                int s = SkipWs(m, branchStart), e = SkipWsBack(m, branchEnd);
+                                if (WordAt(m, s) is "null" or "default" or "new" || ChainEnd(m, s, out _) != e) continue;
+                                Add(edits, e, 0, conversion);
+                                converted = true;
+                            }
+                            needsLinq |= converted && list;
+                            return converted;
+                        }
                         string word = WordBefore(m, SkipWsBack(m, offset));
                         if (word == "ref" || word == "out") return false;
                         int end = ChainEnd(m, offset, out _);
                         if (end < 0 || !ClosesExpression(m, end)) return false;
-                        Add(edits, end, 0, array ? ".ToArray()" : ".ToList()");
+                        Add(edits, end, 0, conversion);
                         needsLinq |= list;
                         return true;
                     }
@@ -399,21 +433,93 @@ namespace SST.StableRef.Migration
         #region Silent uses
 
         /// <summary>
-        /// Finds the uses of retyped fields that still compile but now test or read the wrapper — <c>x == null</c>,
-        /// <c>x != null</c>, <c>null == x</c>, <c>x is …</c>, <c>x as T</c>, <c>ReferenceEquals(x, null)</c>,
-        /// <c>x.GetType()</c>, <c>x.Equals(…)</c>, <c>x.Member</c> where the value type has a member the wrapper has too
-        /// (<c>Value</c>) — and inserts <c>.Value</c>. A use is fixed only when the name surely means the field
-        /// (<see cref="Field.OwnFile"/> for <c>x</c> / <c>this.x</c> and the file declares no local of that name,
-        /// <see cref="Field.UniqueName"/> for <c>a.x</c>); other such uses are added to <paramref name="review"/>.
-        /// Lists are skipped: a <c>StableRefList&lt;T&gt;</c> is never null, which is what the old checks guarded.
+        /// What the silent-use check asks about types. The answers come from the types loaded before the retype (the
+        /// editor's reflection, <see cref="MigrationTypeModel"/>); a type is opaque here and <c>null</c> means unknown.
         /// </summary>
-        public static string FixSilentUses(string text, IReadOnlyDictionary<string, Field> fields, List<string> changes,
-            List<string> review)
+        public interface ITypeModel
         {
-            string m = Mask(text);
+            /// <summary>
+            /// The type written as <paramref name="name"/> (<c>Foo</c>, <c>Ns.Foo</c>, <c>Outer.Inner</c>,
+            /// <c>List&lt;Foo&gt;</c>, <c>Foo[]</c>, <c>Foo`1</c> for a generic definition) in a file that sees
+            /// <paramref name="namespaces"/>.
+            /// </summary>
+            object ResolveType(string name, IReadOnlyList<string> namespaces);
+
+            /// <summary>The type of the field or property <paramref name="member"/> of <paramref name="type"/> or its base types.</summary>
+            object MemberType(object type, string member);
+
+            /// <summary>
+            /// The return type of <paramref name="method"/> of <paramref name="type"/> called with
+            /// <paramref name="argumentCount"/> arguments and the explicit <paramref name="typeArguments"/> (none when
+            /// empty), when every such overload returns the same type.
+            /// </summary>
+            object CallType(object type, string method, int argumentCount, IReadOnlyList<object> typeArguments);
+
+            /// <summary>What indexing or enumerating <paramref name="type"/> gives.</summary>
+            object ElementType(object type);
+
+            /// <summary><c>IEnumerable&lt;element&gt;</c>.</summary>
+            object Sequence(object element);
+
+            /// <summary>
+            /// The type of part <paramref name="index"/> of <paramref name="count"/> when <paramref name="type"/> is
+            /// deconstructed (<c>var (a, b) = x;</c>): a tuple's element, a <c>KeyValuePair</c>'s key or value, a
+            /// <c>Deconstruct</c> method's <c>out</c> parameter.
+            /// </summary>
+            object DeconstructedType(object type, int index, int count);
+
+            /// <summary>Whether <paramref name="member"/> of <paramref name="type"/> (or of its base types) is a retyped single-reference field.</summary>
+            bool IsRetyped(object type, string member);
+
+            /// <summary>
+            /// How argument <paramref name="index"/> of <paramref name="argumentCount"/> of a call of
+            /// <paramref name="method"/> on <paramref name="type"/> (a constructor of <paramref name="type"/> when
+            /// <paramref name="method"/> is <c>null</c>) takes a value.
+            /// </summary>
+            ArgumentUse Argument(object type, string method, int index, int argumentCount);
+        }
+
+        /// <summary>What a parameter makes of a wrapper passed to it.</summary>
+        public enum ArgumentUse
+        {
+            /// <summary>No overload was found.</summary>
+            Unknown,
+            /// <summary><c>object</c> or a type parameter: the wrapper passes silently where the value was meant.</summary>
+            Value,
+            /// <summary>A StableRef type: the wrapper is meant.</summary>
+            Wrapper,
+            /// <summary>The value's type: passing the wrapper is a compile error, fixed by the diagnostics.</summary>
+            Typed
+        }
+
+        private enum Certainty { Unknown, Field, NotField }
+
+        /// <summary>
+        /// Finds the uses of retyped fields that still compile but now test or read the wrapper and inserts
+        /// <c>.Value</c>: <c>x == null</c>, <c>x != y</c>, <c>null == x</c>, <c>x is …</c>, <c>x as T</c>, <c>x ?? y</c>,
+        /// <c>x switch</c>, <c>switch (x)</c>, <c>ReferenceEquals(x, …)</c>, <c>x.GetType()</c>, <c>x.Equals(…)</c>,
+        /// <c>x.GetHashCode()</c>, <c>x.Member</c> where the value type has a member the wrapper has too (<c>Value</c>),
+        /// <c>x</c> passed where a parameter is <c>object</c> or a type parameter, and the same uses of a local that
+        /// holds the wrapper (<c>var x = o.field;</c>).
+        /// </summary>
+        /// <remarks>
+        /// A use is fixed only when the name surely means the field. A local or parameter of the same name hides it in
+        /// its scope. With a <paramref name="model"/>, the type of what precedes the name (<c>a</c> in <c>a.x</c>, the
+        /// enclosing class for <c>x</c> / <c>this.x</c>) is read from the code — declarations, <c>var</c> initializers,
+        /// <c>foreach</c> elements, LINQ lambda parameters, members, calls and indexers — and the field is the retyped
+        /// one only when that type declares it. When the type can't be read: <see cref="Field.OwnFile"/> for <c>x</c>
+        /// / <c>this.x</c>, <see cref="Field.UniqueName"/> for <c>a.x</c>; the rest is added to
+        /// <paramref name="review"/>. Lists are skipped: a <c>StableRefList&lt;T&gt;</c> is never null, which is what
+        /// the old checks guarded.
+        /// </remarks>
+        public static string FixSilentUses(string text, IReadOnlyDictionary<string, Field> fields, List<string> changes,
+            List<string> review, ITypeModel model = null)
+        {
+            var scope = new FileScope(Mask(text), model);
+            string m = scope.M;
             var lineStarts = LineStarts(text);
             var edits = new List<Edit>();
-            HashSet<string> localNames = null;
+            var aliases = WrapperAliases(scope, fields);
 
             for (int i = 0; i < m.Length; i++)
             {
@@ -423,30 +529,31 @@ namespace SST.StableRef.Migration
                 string name = m.Substring(i, end - i);
                 int start = i;
                 i = end - 1;
-                if (!fields.TryGetValue(name, out var field) || field.IsList) continue;
 
-                string pattern = SilentPattern(m, start, end, field, out int insertAt, out int remove, out string insert);
+                Alias alias = null;
+                if (!fields.TryGetValue(name, out var field) || (field.IsList && model == null))
+                {
+                    alias = aliases.FirstOrDefault(a => a.Name == name && start > a.Declared && start < a.ScopeEnd);
+                    if (alias == null || IsQualified(m, start)) continue;
+                    field = alias.Field;
+                }
+
+                string pattern = SilentPattern(scope, start, end, field, out int insertAt, out int remove, out string insert, out bool unresolvedCall);
                 if (pattern == null) continue;
 
-                int before = SkipWsBack(m, start);
-                bool qualified = before > 0 && m[before - 1] == '.';
-                bool viaThis = qualified && WordBefore(m, SkipWsBack(m, before - 1)) is "this" or "base";
-                bool sure;
-                if (!qualified || viaThis)
-                {
-                    if (!field.OwnFile) continue;
-                    localNames ??= DeclaredLocals(m, fields);
-                    sure = !localNames.Contains(name);
-                }
-                else
-                {
-                    sure = field.UniqueName;
-                }
+                var certainty = alias != null ? Certainty.Field : Decide(scope, start, name, field);
+                if (certainty == Certainty.NotField) continue;
 
                 string where = $"({LineOf(lineStarts, start) + 1}) {Snippet(text, start, end)}";
-                if (!sure)
+                if (certainty == Certainty.Unknown)
                 {
-                    review.Add($"{where} — {pattern} on '{name}' may test the StableRef wrapper now; if '{name}' is the retyped field, add .Value");
+                    if (!unresolvedCall)
+                        review.Add($"{where} — {pattern} on '{name}' may test the StableRef wrapper now; if '{name}' is the retyped field, add .Value");
+                    continue;
+                }
+                if (unresolvedCall)
+                {
+                    review.Add($"{where} — '{name}' is {pattern}, whose parameter couldn't be read; if it takes object or a type parameter, add .Value");
                     continue;
                 }
                 Add(edits, insertAt, remove, insert);
@@ -456,12 +563,55 @@ namespace SST.StableRef.Migration
             return Apply(text, edits);
         }
 
-        /// <summary>The silent pattern around the identifier at [start, end), and the edit that fixes it.</summary>
-        private static string SilentPattern(string m, int start, int end, Field field, out int insertAt, out int remove, out string insert)
+        /// <summary>Whether the field named at <paramref name="start"/> is the retyped one.</summary>
+        private static Certainty Decide(FileScope s, int start, string name, Field field)
         {
+            string m = s.M;
+            int before = SkipWsBack(m, start);
+            // A name that is a list somewhere is told apart by the type that declares it only.
+            if (!IsQualified(m, start))
+            {
+                if (FindLocal(s, start, name) != null) return Certainty.NotField;
+                var enclosing = s.Model != null ? EnclosingType(s, start) : null;
+                if (enclosing != null) return s.Model.IsRetyped(enclosing, name) ? Certainty.Field : Certainty.NotField;
+                return field.OwnFile && !field.IsList ? Certainty.Field : Certainty.NotField;
+            }
+
+            int receiverEnd = SkipWsBack(m, before > 1 && m[before - 2] == '?' ? before - 2 : before - 1);
+            int receiverStart = ChainStart(m, receiverEnd);
+            string receiver = receiverStart >= 0 ? m.Substring(receiverStart, receiverEnd - receiverStart).Trim() : null;
+            if (receiver is "this" or "base")
+            {
+                var enclosing = s.Model != null ? EnclosingType(s, start) : null;
+                if (enclosing != null) return s.Model.IsRetyped(enclosing, name) ? Certainty.Field : Certainty.NotField;
+                return field.OwnFile && !field.IsList ? Certainty.Field : Certainty.NotField;
+            }
+            if (s.Model != null && receiverStart >= 0)
+            {
+                var type = TypeOfChain(s, receiverStart, receiverEnd, 0);
+                if (type != null) return s.Model.IsRetyped(type, name) ? Certainty.Field : Certainty.NotField;
+            }
+            if (field.IsList) return field.AlsoSingle ? Certainty.Unknown : Certainty.NotField;
+            return field.UniqueName ? Certainty.Field : Certainty.Unknown;
+        }
+
+        /// <summary>Whether the identifier at <paramref name="start"/> follows a <c>.</c> / <c>?.</c>.</summary>
+        private static bool IsQualified(string m, int start)
+        {
+            int before = SkipWsBack(m, start);
+            return before > 0 && m[before - 1] == '.' && !(before > 1 && m[before - 2] == '.');
+        }
+
+        /// <summary>The silent pattern around the identifier at [start, end), and the edit that fixes it.</summary>
+        /// <param name="unresolvedCall">The name is an argument of a call whose parameter couldn't be read.</param>
+        private static string SilentPattern(FileScope s, int start, int end, Field field, out int insertAt, out int remove,
+            out string insert, out bool unresolvedCall)
+        {
+            string m = s.M;
             insertAt = end;
             remove = 0;
             insert = ValueSuffix;
+            unresolvedCall = false;
 
             // A declaration (`IEffect effect`, `var effect`, `effect =>`) or a call of a method with the same name.
             int next = SkipWs(m, end);
@@ -475,13 +625,13 @@ namespace SST.StableRef.Migration
             if (next < m.Length && m[next] == '.' && !Next(m, next, ".."))
             {
                 string member = WordAt(m, SkipWs(m, next + 1));
-                if (member == "GetType" || member == "Equals" || field.SharedMembers.Contains(member)) return $".{member}";
+                if (ObjectMembers.Contains(member) || field.SharedMembers.Contains(member)) return $".{member}";
                 return null;
             }
-            if (Next(m, next, "?.") )
+            if (Next(m, next, "?."))
             {
                 string member = WordAt(m, SkipWs(m, next + 2));
-                if (member == "GetType" || member == "Equals" || field.SharedMembers.Contains(member))
+                if (ObjectMembers.Contains(member) || field.SharedMembers.Contains(member))
                 {
                     insertAt = next;
                     remove = 2;
@@ -490,53 +640,830 @@ namespace SST.StableRef.Migration
                 }
                 return null;
             }
-            if ((Next(m, next, "==") || Next(m, next, "!=")) && WordAt(m, SkipWs(m, next + 2)) == "null")
-                return m.Substring(next, 2) + " null";
+            if (Next(m, next, "==") || Next(m, next, "!="))
+                return WordAt(m, SkipWs(m, next + 2)) == "null" ? m.Substring(next, 2) + " null" : m.Substring(next, 2);
+            if (Next(m, next, "??") && !Next(m, next, "??=")) return "??";
             string word = WordAt(m, next);
-            if (word == "is" || word == "as") return word;
+            if (word is "is" or "as" or "switch") return word;
 
             int chainStart = ChainStart(m, end);
             int before = SkipWsBack(m, chainStart >= 0 ? chainStart : start);
             if (before >= 2 && m[before - 1] == '=' && (m[before - 2] == '=' || m[before - 2] == '!')
-                && WordBefore(m, SkipWsBack(m, before - 2)) == "null")
-                return "null " + m.Substring(before - 2, 2);
-            if (before > 0 && m[before - 1] == '(' && WordBefore(m, SkipWsBack(m, before - 1)) == "ReferenceEquals")
-                return "ReferenceEquals";
-            return null;
+                && !(before >= 3 && "=<>".IndexOf(m[before - 3]) >= 0))
+                return WordBefore(m, SkipWsBack(m, before - 2)) == "null" ? "null " + m.Substring(before - 2, 2) : m.Substring(before - 2, 2);
+            return ArgumentPattern(s, chainStart >= 0 ? chainStart : start, end, out unresolvedCall);
         }
 
-        /// <summary>Names of <paramref name="fields"/> that the file also declares as a local, parameter or another member.</summary>
-        private static HashSet<string> DeclaredLocals(string m, IReadOnlyDictionary<string, Field> fields)
+        /// <summary>Members of <c>object</c> the wrapper answers for itself instead of the value; <c>ToString</c> is the value's.</summary>
+        private static readonly HashSet<string> ObjectMembers = new(StringComparer.Ordinal) { "GetType", "Equals", "GetHashCode" };
+
+        /// <summary>
+        /// The expression [start, end) as a whole argument of a call: <c>switch (x)</c>, <c>ReferenceEquals(x, …)</c>,
+        /// or a parameter that takes <c>object</c> / a type parameter (asked from the model).
+        /// </summary>
+        private static string ArgumentPattern(FileScope s, int start, int end, out bool unresolved)
         {
-            var result = new HashSet<string>(StringComparer.Ordinal);
-            for (int i = 0; i < m.Length; i++)
+            unresolved = false;
+            string m = s.M;
+            int after = SkipWs(m, end);
+            if (after >= m.Length || (m[after] != ',' && m[after] != ')')) return null;
+            int before = SkipWsBack(m, start);
+            if (before == 0 || (m[before - 1] != '(' && m[before - 1] != ',')) return null;
+            int open = m[before - 1] == '(' ? before - 1 : UnmatchedOpen(m, before - 1);
+            if (open < 0 || m[open] != '(') return null;
+
+            int nameEnd = SkipWsBack(m, open);
+            if (nameEnd == 0) return null;
+            string method = WordBefore(m, nameEnd);
+            if (method == "switch") return m[after] == ')' ? "switch" : null;
+            if (method == "ReferenceEquals") return "ReferenceEquals";
+            if (method.Length == 0 || NotCalls.Contains(method)) return null;
+
+            int typeArgsEnd = nameEnd;
+            if (m[nameEnd - 1] == '>')
             {
-                if (!IsIdentifierStart(m[i]) || (i > 0 && IsIdentifierChar(m[i - 1]))) continue;
-                int end = i;
-                while (end < m.Length && IsIdentifierChar(m[end])) end++;
-                string name = m.Substring(i, end - i);
-                if (fields.ContainsKey(name) && !result.Contains(name))
-                {
-                    int next = SkipWs(m, end);
-                    // The field's own declaration is the one whose type is the wrapper.
-                    bool declaration = IsDeclarationName(m, i, end) && !DeclaredAsWrapper(m, i);
-                    bool lambda = Next(m, next, "=>");
-                    if (declaration || lambda) result.Add(name);
-                }
-                i = end - 1;
+                int angle = MatchAngleOpen(m, nameEnd - 1);
+                if (angle < 0) return null;
+                typeArgsEnd = SkipWsBack(m, angle);
+                method = WordBefore(m, typeArgsEnd);
+                if (method.Length == 0) return null;
+            }
+            if (s.Model == null) return null;
+
+            int methodStart = typeArgsEnd - method.Length;
+            int close = MatchClose(m, open);
+            if (close < 0) return null;
+            int index = TopLevelCommas(m, open + 1, start);
+            int count = ArgumentCount(m, open, close);
+
+            object type;
+            string call;
+            int p = SkipWsBack(m, methodStart);
+            if (WordBefore(m, p) == "new")
+            {
+                type = s.Model.ResolveType(m.Substring(methodStart, nameEnd - methodStart).Replace(" ", ""), s.Namespaces);
+                call = $"an argument of new {method}(…)";
+                method = null;
+            }
+            else if (p > 0 && m[p - 1] == '.')
+            {
+                int receiverEnd = SkipWsBack(m, p > 1 && m[p - 2] == '?' ? p - 2 : p - 1);
+                int receiverStart = ChainStart(m, receiverEnd);
+                type = receiverStart >= 0 ? TypeOfChain(s, receiverStart, receiverEnd, 0) : null;
+                call = $"an argument of {method}(…)";
+            }
+            else
+            {
+                // A local delegate (`condition(x)`) or a method of the enclosing type.
+                var callee = FindLocal(s, methodStart, method);
+                type = callee != null ? TypeOfLocal(s, callee, 0) : EnclosingType(s, open);
+                call = $"an argument of {method}(…)";
+                if (callee != null) method = "Invoke";
+            }
+
+            switch (type != null ? s.Model.Argument(type, method, index, count) : ArgumentUse.Unknown)
+            {
+                case ArgumentUse.Value:
+                    return call;
+                case ArgumentUse.Unknown:
+                    unresolved = true;
+                    return call;
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>Words followed by parentheses that aren't calls.</summary>
+        private static readonly HashSet<string> NotCalls = new(StringComparer.Ordinal)
+        {
+            "if", "while", "for", "foreach", "using", "lock", "catch", "return", "nameof", "typeof", "sizeof", "default",
+            "when", "fixed", "checked", "unchecked", "await", "throw", "base", "this", "is", "and", "or", "not", "in"
+        };
+
+        #region Wrapper aliases
+
+        private sealed class Alias
+        {
+            public string Name;
+            public Field Field;
+            public int Declared;
+            public int ScopeEnd;
+        }
+
+        /// <summary>
+        /// Locals that hold the wrapper of a retyped field: <c>var x = o.field;</c> (with the field surely the retyped
+        /// one) — their silent uses are the field's.
+        /// </summary>
+        private static List<Alias> WrapperAliases(FileScope s, IReadOnlyDictionary<string, Field> fields)
+        {
+            var result = new List<Alias>();
+            string m = s.M;
+            for (int i = m.IndexOf("var", StringComparison.Ordinal); i >= 0; i = m.IndexOf("var", i + 3, StringComparison.Ordinal))
+            {
+                if (WordAt(m, i) != "var") continue;
+                int nameStart = SkipWs(m, i + 3);
+                string name = WordAt(m, nameStart);
+                if (name.Length == 0) continue;
+                int eq = SkipWs(m, nameStart + name.Length);
+                if (eq >= m.Length || m[eq] != '=' || Next(m, eq, "==") || Next(m, eq, "=>")) continue;
+                int valueStart = SkipWs(m, eq + 1);
+                int valueEnd = ChainEnd(m, valueStart, out string last);
+                if (valueEnd < 0 || last == null || SkipWs(m, valueEnd) >= m.Length || m[SkipWs(m, valueEnd)] != ';') continue;
+                if (!fields.TryGetValue(last, out var field)) continue;
+                if (Decide(s, valueEnd - last.Length, last, field) != Certainty.Field) continue;
+                int scopeEnd = ScopeEnd(m, nameStart);
+                if (scopeEnd < 0) continue;
+                result.Add(new Alias { Name = name, Field = field, Declared = nameStart + name.Length, ScopeEnd = scopeEnd });
             }
             return result;
         }
 
-        private static bool DeclaredAsWrapper(string m, int nameStart)
+        #endregion
+
+        #region Locals and scopes
+
+        private enum LocalKind { Typed, VarValue, VarForeach, LambdaParameter, Deconstructed, Unknown }
+
+        /// <summary>A local, parameter or lambda parameter, as declared.</summary>
+        private sealed class Local
         {
-            int p = SkipWsBack(m, nameStart);
-            if (p == 0 || m[p - 1] != '>') return false;
-            int open = MatchAngleOpen(m, p - 1);
-            if (open < 0) return false;
-            string type = WordBefore(m, SkipWsBack(m, open));
-            return type == "StableRef" || type == "StableRefList";
+            public LocalKind Kind;
+            /// <summary>The written type (<see cref="LocalKind.Typed"/>, a typed lambda parameter).</summary>
+            public string Type;
+            /// <summary>The initializer or <c>foreach</c> collection.</summary>
+            public int ValueStart, ValueEnd;
+            /// <summary>Where the lambda starts (its parameter or <c>(</c>) and the parameter's index.</summary>
+            public int Lambda, Index;
+            /// <summary>A deconstruction's part count, and whether its value is a <c>foreach</c> collection.</summary>
+            public int Count;
+            public bool InForeach;
         }
+
+        /// <summary>
+        /// The local, parameter or lambda parameter named <paramref name="name"/> whose scope holds
+        /// <paramref name="position"/>, nearest first; <c>null</c> when the name isn't one (a member, a type…).
+        /// </summary>
+        private static Local FindLocal(FileScope s, int position, string name)
+        {
+            string m = s.M;
+            int limit = TypeBodyStart(m, position);
+            for (int d = LastIndexIn(m, name, limit + 1, position); d > limit; d = LastIndexIn(m, name, limit + 1, d + name.Length - 1))
+            {
+                int end = d + name.Length;
+                if (WordAt(m, d) != name || IsQualified(m, d)) continue;
+                var local = Declaration(m, d, end);
+                if (local == null) continue;
+                int scopeEnd = local.Kind == LocalKind.LambdaParameter && local.Lambda == d ? LambdaBodyEnd(m, SkipWs(m, end)) : ScopeEnd(m, d);
+                if (scopeEnd >= position) return local;
+            }
+            return null;
+        }
+
+        /// <summary>The declaration the identifier at [start, end) makes, if it makes one.</summary>
+        private static Local Declaration(string m, int start, int end)
+        {
+            int next = SkipWs(m, end);
+            int before = SkipWsBack(m, start);
+            char prev = before > 0 ? m[before - 1] : '\0';
+
+            // `x => …`
+            if (Next(m, next, "=>") && (prev == '(' || prev == ',' || prev == '=' || prev == '\0' || prev == '?' || prev == ':'
+                                        || WordBefore(m, before) == "return"))
+                return new Local { Kind = LocalKind.LambdaParameter, Lambda = start, Index = 0 };
+
+            // `var (a, b) = x;`, `foreach (var (a, b) in xs)`
+            int open = UnmatchedOpen(m, start);
+            if (open >= 0 && m[open] == '(' && (prev == '(' || prev == ',') && next < m.Length && (m[next] == ',' || m[next] == ')')
+                && WordBefore(m, SkipWsBack(m, open)) == "var")
+            {
+                int close = MatchClose(m, open);
+                int after = close > 0 ? SkipWs(m, close) : -1;
+                if (after < 0) return null;
+                var local = new Local
+                {
+                    Kind = LocalKind.Deconstructed, Index = TopLevelCommas(m, open + 1, start), Count = ArgumentCount(m, open, close)
+                };
+                if (after < m.Length && m[after] == '=' && !Next(m, after, "==") && !Next(m, after, "=>"))
+                {
+                    local.ValueStart = SkipWs(m, after + 1);
+                    local.ValueEnd = ExpressionEnd(m, after + 1);
+                    return local;
+                }
+                if (WordAt(m, after) == "in")
+                {
+                    int foreachOpen = UnmatchedOpen(m, open);
+                    int foreachClose = foreachOpen >= 0 ? MatchClose(m, foreachOpen) : -1;
+                    if (foreachClose < 0) return null;
+                    local.ValueStart = SkipWs(m, after + 2);
+                    local.ValueEnd = foreachClose - 1;
+                    local.InForeach = true;
+                    return local;
+                }
+                return new Local { Kind = LocalKind.Unknown };
+            }
+
+            // `(a, b) => …` / `(A a, B b) => …`
+            if (open >= 0 && m[open] == '(')
+            {
+                int close = MatchClose(m, open);
+                if (close > 0 && Next(m, SkipWs(m, close), "=>") && SkipWs(m, end) < m.Length && (m[next] == ',' || m[next] == ')')
+                    && IsParameterList(m, open, close))
+                {
+                    string type = prev == '(' || prev == ',' ? null : TypeBefore(m, start);
+                    return new Local { Kind = LocalKind.LambdaParameter, Type = type, Lambda = open, Index = TopLevelCommas(m, open + 1, start) };
+                }
+            }
+
+            bool pattern = false;
+            if (!IsDeclarationName(m, start, end))
+            {
+                // `is Foo foo &&`, `case Foo foo when`, `out Foo foo`
+                if (TypeBefore(m, start, out int typeStart) == null) return null;
+                string word = WordBefore(m, SkipWsBack(m, typeStart));
+                if (word != "is" && word != "case" && word != "out") return null;
+                pattern = true;
+            }
+            string typeText = TypeBefore(m, start);
+            if (typeText == null) return null;
+            if (typeText != "var") return new Local { Kind = LocalKind.Typed, Type = typeText };
+            if (!pattern && next < m.Length && m[next] == '=')
+                return new Local { Kind = LocalKind.VarValue, ValueStart = SkipWs(m, next + 1), ValueEnd = ExpressionEnd(m, next + 1) };
+            if (WordAt(m, next) == "in")
+            {
+                int collection = SkipWs(m, next + 2);
+                int foreachOpen = UnmatchedOpen(m, start);
+                int foreachClose = foreachOpen >= 0 ? MatchClose(m, foreachOpen) : -1;
+                if (foreachClose > 0) return new Local { Kind = LocalKind.VarForeach, ValueStart = collection, ValueEnd = foreachClose - 1 };
+            }
+            return new Local { Kind = LocalKind.Unknown };
+        }
+
+        /// <summary>Whether ( … ) holds lambda parameters only: names, each optionally after a type.</summary>
+        private static bool IsParameterList(string m, int open, int close)
+        {
+            for (int i = open + 1; i < close - 1; i++)
+            {
+                char c = m[i];
+                if (!(IsIdentifierChar(c) || char.IsWhiteSpace(c) || c == ',' || c == '.' || c == '<' || c == '>' || c == '[' || c == ']' || c == '?'))
+                    return false;
+            }
+            return true;
+        }
+
+        /// <summary>The type written right before the identifier at <paramref name="start"/> (<c>Ns.List&lt;A&gt;[]?</c>), without spaces.</summary>
+        private static string TypeBefore(string m, int start) => TypeBefore(m, start, out _);
+
+        private static string TypeBefore(string m, int start, out int typeStart)
+        {
+            typeStart = -1;
+            int end = SkipWsBack(m, start);
+            int i = end;
+            while (true)
+            {
+                if (i > 0 && m[i - 1] == '?') i = SkipWsBack(m, i - 1);
+                while (i > 0 && m[i - 1] == ']')
+                {
+                    int open = MatchOpen(m, i - 1);
+                    if (open < 0 || m.Substring(open + 1, i - open - 2).Trim(',', ' ').Length > 0) return null;
+                    i = SkipWsBack(m, open);
+                }
+                if (i > 0 && m[i - 1] == '>')
+                {
+                    int open = TypeArgumentsOpen(m, i - 1);
+                    if (open < 0) return null;
+                    i = SkipWsBack(m, open);
+                }
+                string word = WordBefore(m, i);
+                if (word.Length == 0 || (Keywords.Contains(word) && word != "var")) return null;
+                i -= word.Length;
+                int dot = SkipWsBack(m, i);
+                if (dot > 0 && m[dot - 1] == '.' && !(dot > 1 && m[dot - 2] == '.'))
+                {
+                    i = SkipWsBack(m, dot - 1);
+                    continue;
+                }
+                break;
+            }
+            if (i == end) return null;
+            typeStart = i;
+            return new string(m.Substring(i, end - i).Where(c => !char.IsWhiteSpace(c)).ToArray());
+        }
+
+        /// <summary>
+        /// The <c>&lt;</c> of the type arguments whose <c>&gt;</c> is at <paramref name="close"/>; tuples inside
+        /// (<c>List&lt;(int, A)&gt;</c>) are part of them. -1 when the text there is no type.
+        /// </summary>
+        private static int TypeArgumentsOpen(string m, int close)
+        {
+            int angles = 0, parens = 0;
+            for (int i = close; i >= 0; i--)
+            {
+                char c = m[i];
+                if (c == '>') angles++;
+                else if (c == '<' && --angles == 0) return parens == 0 ? i : -1;
+                else if (c == ')') parens++;
+                else if (c == '(') { if (--parens < 0) return -1; }
+                else if (!(IsIdentifierChar(c) || char.IsWhiteSpace(c) || c == '.' || c == ',' || c == '[' || c == ']' || c == '?')) return -1;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Where the scope of a name declared at <paramref name="position"/> ends: its block, the body of the method or
+        /// lambda it's a parameter of, the statement of a <c>foreach</c> / <c>for</c> / <c>using</c> / <c>catch</c>; -1
+        /// for a member of a type.
+        /// </summary>
+        private static int ScopeEnd(string m, int position)
+        {
+            int open = UnmatchedOpen(m, position);
+            if (open < 0) return -1;
+            if (m[open] == '{') return IsTypeBody(m, open) ? -1 : MatchClose(m, open);
+            if (m[open] == '[') return -1;
+
+            int close = MatchClose(m, open);
+            if (close < 0) return -1;
+            int after = SkipWs(m, close);
+            if (Next(m, after, "=>")) return LambdaBodyEnd(m, after);
+            if (after < m.Length && m[after] == '{') return MatchClose(m, after);
+            string keyword = WordBefore(m, SkipWsBack(m, open));
+            if (keyword is "foreach" or "for" or "using" or "catch" or "fixed")
+                return after < m.Length && m[after] == '{' ? MatchClose(m, after) : ExpressionEnd(m, after) + 1;
+            // A pattern or `out` variable in a condition or an argument: the enclosing block.
+            int block = UnmatchedBrace(m, open);
+            return block >= 0 && !IsTypeBody(m, block) ? MatchClose(m, block) : -1;
+        }
+
+        /// <summary>The end of the lambda or expression body whose <c>=&gt;</c> is at <paramref name="arrow"/>.</summary>
+        private static int LambdaBodyEnd(string m, int arrow)
+        {
+            int body = SkipWs(m, arrow + 2);
+            return body < m.Length && m[body] == '{' ? MatchClose(m, body) : ExpressionEnd(m, body);
+        }
+
+        /// <summary>The nearest unmatched <c>( [ {</c> before <paramref name="position"/>; -1 when there is none.</summary>
+        private static int UnmatchedOpen(string m, int position)
+        {
+            int depth = 0;
+            for (int i = position - 1; i >= 0; i--)
+            {
+                char c = m[i];
+                if (c == ')' || c == ']' || c == '}') depth++;
+                else if (c == '(' || c == '[' || c == '{')
+                {
+                    if (depth == 0) return i;
+                    depth--;
+                }
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// The nearest unmatched <c>{</c> before <paramref name="position"/>, through any parentheses (a lambda block
+        /// inside call arguments); -1 when there is none.
+        /// </summary>
+        private static int UnmatchedBrace(string m, int position)
+        {
+            int depth = 0;
+            for (int i = position - 1; i >= 0; i--)
+            {
+                char c = m[i];
+                if (c == '}') depth++;
+                else if (c == '{' && depth-- == 0) return i;
+            }
+            return -1;
+        }
+
+        /// <summary>The last <paramref name="token"/> that lies within [from, to); -1 when there is none.</summary>
+        private static int LastIndexIn(string m, string token, int from, int to)
+        {
+            for (int i = to - token.Length; i >= from; i--)
+                if (Next(m, i, token)) return i;
+            return -1;
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex TypeHeader =
+            new(@"\b(class|struct|interface|record)\s+(@?\w+)\s*(<[^{;]*?>)?", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        /// <summary>The declaration header before <paramref name="brace"/>: the text back to the previous <c>; { }</c>.</summary>
+        private static string HeaderBefore(string m, int brace)
+        {
+            int depth = 0, i = brace - 1;
+            for (; i >= 0; i--)
+            {
+                char c = m[i];
+                if (c == ')' || c == ']') depth++;
+                else if (c == '(' || c == '[') { if (--depth < 0) break; }
+                else if (depth == 0 && (c == ';' || c == '{' || c == '}')) break;
+            }
+            return m.Substring(i + 1, brace - i - 1);
+        }
+
+        private static bool IsTypeBody(string m, int brace) => TypeHeader.IsMatch(HeaderBefore(m, brace));
+
+        /// <summary>The <c>{</c> of the innermost type body around <paramref name="position"/>; -1 at file level.</summary>
+        private static int TypeBodyStart(string m, int position)
+        {
+            for (int brace = UnmatchedBrace(m, position); brace >= 0; brace = UnmatchedBrace(m, brace))
+                if (IsTypeBody(m, brace)) return brace;
+            return -1;
+        }
+
+        /// <summary>Commas at the top level of [from, to).</summary>
+        private static int TopLevelCommas(string m, int from, int to)
+        {
+            int depth = 0, count = 0;
+            for (int i = from; i < to; i++)
+            {
+                char c = m[i];
+                if (c == '(' || c == '[' || c == '{' || c == '<') depth++;
+                else if (c == ')' || c == ']' || c == '}' || (c == '>' && !(i > 0 && m[i - 1] == '='))) depth--;
+                else if (c == ',' && depth == 0) count++;
+            }
+            return count;
+        }
+
+        /// <summary>The number of arguments between the parentheses at <paramref name="open"/> and <paramref name="close"/> (right after <c>)</c>).</summary>
+        private static int ArgumentCount(string m, int open, int close) =>
+            SkipWs(m, open + 1) >= close - 1 ? 0 : TopLevelCommas(m, open + 1, close - 1) + 1;
+
+        #endregion
+
+        #region Types
+
+        /// <summary>Per-file state of the silent-use check.</summary>
+        private sealed class FileScope
+        {
+            public readonly string M;
+            public readonly ITypeModel Model;
+            private IReadOnlyList<string> _namespaces;
+            private readonly Dictionary<int, object> _enclosing = new();
+
+            public FileScope(string masked, ITypeModel model)
+            {
+                M = masked;
+                Model = model;
+            }
+
+            /// <summary>
+            /// The namespaces the file sees, nearest first: its namespace declarations with their parents, its
+            /// <c>using</c> directives, the global namespace.
+            /// </summary>
+            public IReadOnlyList<string> Namespaces => _namespaces ??= ReadNamespaces(M);
+
+            public object Enclosing(int brace, Func<object> resolve)
+            {
+                if (!_enclosing.TryGetValue(brace, out var type)) _enclosing[brace] = type = resolve();
+                return type;
+            }
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex UsingDirective =
+            new(@"^\s*(?:global\s+)?using\s+(?!static\b)([\w.]+)\s*;", System.Text.RegularExpressions.RegexOptions.Multiline | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static readonly System.Text.RegularExpressions.Regex NamespaceDeclaration =
+            new(@"\bnamespace\s+([\w.]+)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static IReadOnlyList<string> ReadNamespaces(string m)
+        {
+            var result = new List<string>();
+            foreach (var match in NamespaceDeclaration.Matches(m).Cast<System.Text.RegularExpressions.Match>().Reverse())
+            {
+                for (string ns = match.Groups[1].Value; ns.Length > 0; ns = ns.IndexOf('.') >= 0 ? ns.Substring(0, ns.LastIndexOf('.')) : "")
+                    result.Add(ns);
+            }
+            foreach (System.Text.RegularExpressions.Match match in UsingDirective.Matches(m))
+                result.Add(match.Groups[1].Value);
+            result.Add("");
+            return result.Distinct().ToList();
+        }
+
+        /// <summary>The type whose body holds <paramref name="position"/> (<c>Outer.Inner</c>, <c>Foo`1</c>), as the model knows it.</summary>
+        private static object EnclosingType(FileScope s, int position)
+        {
+            if (s.Model == null) return null;
+            int brace = TypeBodyStart(s.M, position);
+            if (brace < 0) return null;
+            return s.Enclosing(brace, () =>
+            {
+                var names = new List<string>();
+                for (int b = brace; b >= 0; b = UnmatchedBrace(s.M, b))
+                {
+                    var match = TypeHeader.Match(HeaderBefore(s.M, b));
+                    if (!match.Success) continue;
+                    string name = match.Groups[2].Value.TrimStart('@');
+                    if (match.Groups[3].Success) name += "`" + (TopLevelCommas(match.Groups[3].Value, 1, match.Groups[3].Value.Length - 1) + 1);
+                    names.Insert(0, name);
+                }
+                return names.Count > 0 ? s.Model.ResolveType(string.Join(".", names), s.Namespaces) : null;
+            });
+        }
+
+        /// <summary>LINQ methods that keep the element type of the sequence they're called on.</summary>
+        private static readonly HashSet<string> SameSequence = new(StringComparer.Ordinal)
+        {
+            "Where", "Take", "Skip", "TakeWhile", "SkipWhile", "TakeLast", "SkipLast", "OrderBy", "OrderByDescending",
+            "ThenBy", "ThenByDescending", "Distinct", "DistinctBy", "Reverse", "AsEnumerable", "Concat", "Union", "Intersect",
+            "Except", "DefaultIfEmpty", "ToList", "ToArray", "Append", "Prepend", "ToHashSet"
+        };
+
+        /// <summary>LINQ methods that give one element of the sequence they're called on.</summary>
+        private static readonly HashSet<string> OneElement = new(StringComparer.Ordinal)
+        {
+            "First", "FirstOrDefault", "Last", "LastOrDefault", "Single", "SingleOrDefault", "ElementAt", "ElementAtOrDefault",
+            "MinBy", "MaxBy"
+        };
+
+        /// <summary>Methods whose lambda gets the elements of the sequence they're called on as its first parameter.</summary>
+        private static readonly HashSet<string> ElementLambda = new(StringComparer.Ordinal)
+        {
+            "Where", "Select", "SelectMany", "Any", "All", "Count", "LongCount", "First", "FirstOrDefault", "Last",
+            "LastOrDefault", "Single", "SingleOrDefault", "Sum", "Min", "Max", "Average", "MinBy", "MaxBy", "OrderBy",
+            "OrderByDescending", "ThenBy", "ThenByDescending", "GroupBy", "ToDictionary", "ToLookup", "TakeWhile",
+            "SkipWhile", "DistinctBy", "Foreach", "ForEach", "Find", "FindAll", "FindIndex", "FindLast", "FindLastIndex",
+            "Exists", "TrueForAll", "RemoveAll", "TryFirst", "TryLast"
+        };
+
+        /// <summary>The type of the expression [start, end): a member-access chain, maybe parenthesized; <c>null</c> when unknown.</summary>
+        private static object TypeOfChain(FileScope s, int start, int end, int depth)
+        {
+            var model = s.Model;
+            string m = s.M;
+            if (model == null || depth > 8) return null;
+            int i = SkipWs(m, start);
+            if (i >= end) return null;
+            object type;
+
+            if (m[i] == '(')
+            {
+                int close = MatchClose(m, i);
+                if (close < 0 || close > end) return null;
+                type = TypeOfParenthesized(s, i, close, depth);
+                i = close;
+            }
+            else
+            {
+                string head = WordAt(m, i);
+                if (head.Length == 0) return null;
+                int headEnd = i + head.Length;
+                int after = SkipWs(m, headEnd);
+                if (head is "this" or "base")
+                {
+                    type = EnclosingType(s, i);
+                    i = headEnd;
+                }
+                else if (after < end && (m[after] == '(' || TypeArguments(m, after, out _) >= 0))
+                {
+                    type = CallType(s, EnclosingType(s, i), head, after, out i, depth);
+                }
+                else
+                {
+                    type = TypeOfName(s, i, head, depth);
+                    i = headEnd;
+                    if (type == null)
+                    {
+                        // A type, maybe namespace-qualified: Ns.Type.Member
+                        string qualified = head;
+                        for (int j = i; ; )
+                        {
+                            type = model.ResolveType(qualified, s.Namespaces);
+                            if (type != null) { i = j; break; }
+                            int dot = SkipWs(m, j);
+                            if (dot >= end || m[dot] != '.') return null;
+                            string part = WordAt(m, SkipWs(m, dot + 1));
+                            if (part.Length == 0) return null;
+                            qualified += "." + part;
+                            j = SkipWs(m, dot + 1) + part.Length;
+                        }
+                    }
+                }
+            }
+
+            while (type != null)
+            {
+                int j = SkipWs(m, i);
+                if (j >= end) return type;
+                if (m[j] == '!') { i = j + 1; continue; }
+                int dot = Next(m, j, "?.") ? j + 2 : m[j] == '.' ? j + 1 : -1;
+                if (dot > 0)
+                {
+                    int k = SkipWs(m, dot);
+                    string member = WordAt(m, k);
+                    if (member.Length == 0) return null;
+                    int e = k + member.Length;
+                    int a = SkipWs(m, e);
+                    if (a < end && (m[a] == '(' || TypeArguments(m, a, out _) >= 0))
+                    {
+                        type = CallType(s, type, member, a, out i, depth);
+                        continue;
+                    }
+                    type = model.MemberType(type, member);
+                    i = e;
+                    continue;
+                }
+                if (m[j] == '[')
+                {
+                    int close = MatchClose(m, j);
+                    if (close < 0) return null;
+                    type = model.ElementType(type);
+                    i = close;
+                    continue;
+                }
+                return null;
+            }
+            return null;
+        }
+
+        /// <summary><c>(x as T)</c>, <c>((T)x)</c>, <c>(x)</c>.</summary>
+        private static object TypeOfParenthesized(FileScope s, int open, int close, int depth)
+        {
+            string m = s.M;
+            int inner = SkipWs(m, open + 1), innerEnd = SkipWsBack(m, close - 1);
+            int asAt = LastIndexIn(m, " as ", inner, innerEnd);
+            if (asAt > inner && UnmatchedOpen(m, asAt) == open)
+                return s.Model.ResolveType(m.Substring(asAt + 4, innerEnd - asAt - 4).Replace(" ", ""), s.Namespaces);
+            if (m[inner] == '(')
+            {
+                int castClose = MatchClose(m, inner);
+                if (castClose > 0 && castClose < innerEnd)
+                {
+                    string cast = m.Substring(inner + 1, castClose - inner - 2).Replace(" ", "");
+                    var castType = s.Model.ResolveType(cast, s.Namespaces);
+                    if (castType != null) return castType;
+                }
+            }
+            return ChainEnd(m, inner, out _) == innerEnd ? TypeOfChain(s, inner, innerEnd, depth + 1) : null;
+        }
+
+        /// <summary>
+        /// The type a call gives: <paramref name="method"/> called on <paramref name="receiver"/> with the arguments
+        /// (and type arguments) at <paramref name="at"/>; <paramref name="next"/> is right after its <c>)</c>.
+        /// </summary>
+        private static object CallType(FileScope s, object receiver, string method, int at, out int next, int depth)
+        {
+            string m = s.M;
+            next = at;
+            var typeArguments = new List<object>();
+            int open = at;
+            int typeArgsEnd = TypeArguments(m, at, out string typeArgsText);
+            if (typeArgsEnd >= 0)
+            {
+                foreach (string arg in SplitTopLevel(typeArgsText))
+                    typeArguments.Add(s.Model.ResolveType(arg, s.Namespaces));
+                open = SkipWs(m, typeArgsEnd);
+            }
+            if (open >= m.Length || m[open] != '(') return null;
+            int close = MatchClose(m, open);
+            if (close < 0) return null;
+            next = close;
+            if (receiver == null || typeArguments.Any(t => t == null)) return null;
+
+            var element = s.Model.ElementType(receiver);
+            if (element != null)
+            {
+                if ((method == "OfType" || method == "Cast") && typeArguments.Count == 1) return s.Model.Sequence(typeArguments[0]);
+                if (SameSequence.Contains(method) && typeArguments.Count == 0) return s.Model.Sequence(element);
+                if (OneElement.Contains(method) && typeArguments.Count == 0) return element;
+            }
+            return s.Model.CallType(receiver, method, ArgumentCount(m, open, close), typeArguments);
+        }
+
+        /// <summary>
+        /// Explicit type arguments of a call at <paramref name="at"/> (<c>&lt;A, B&gt;(</c>): the index after <c>&gt;</c>,
+        /// or -1 when the <c>&lt;</c> there is no such list.
+        /// </summary>
+        private static int TypeArguments(string m, int at, out string text)
+        {
+            text = null;
+            if (at >= m.Length || m[at] != '<') return -1;
+            int depth = 0;
+            for (int i = at; i < m.Length; i++)
+            {
+                char c = m[i];
+                if (c == '<') depth++;
+                else if (c == '>')
+                {
+                    if (--depth > 0) continue;
+                    int after = SkipWs(m, i + 1);
+                    if (after >= m.Length || m[after] != '(') return -1;
+                    text = new string(m.Substring(at + 1, i - at - 1).Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+                    return i + 1;
+                }
+                else if (!(IsIdentifierChar(c) || c == '.' || c == ',' || c == '[' || c == ']' || c == '?' || char.IsWhiteSpace(c)))
+                    return -1;
+            }
+            return -1;
+        }
+
+        private static IEnumerable<string> SplitTopLevel(string text)
+        {
+            int depth = 0, from = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char c = text[i];
+                if (c == '<' || c == '(' || c == '[') depth++;
+                else if (c == '>' || c == ')' || c == ']') depth--;
+                else if (c == ',' && depth == 0)
+                {
+                    yield return text.Substring(from, i - from);
+                    from = i + 1;
+                }
+            }
+            yield return text.Substring(from);
+        }
+
+        /// <summary>The type of the name at <paramref name="position"/>: a local or parameter, else a member of the enclosing type.</summary>
+        private static object TypeOfName(FileScope s, int position, string name, int depth)
+        {
+            var local = FindLocal(s, position, name);
+            if (local != null) return TypeOfLocal(s, local, depth);
+            var enclosing = EnclosingType(s, position);
+            return enclosing != null ? s.Model.MemberType(enclosing, name) : null;
+        }
+
+        private static object TypeOfLocal(FileScope s, Local local, int depth)
+        {
+            string m = s.M;
+            switch (local.Kind)
+            {
+                case LocalKind.Typed:
+                    return s.Model.ResolveType(local.Type, s.Namespaces);
+                case LocalKind.VarValue:
+                    return TypeOfValue(s, local.ValueStart, SkipWsBack(m, local.ValueEnd), depth + 1);
+                case LocalKind.VarForeach:
+                {
+                    var collection = TypeOfValue(s, local.ValueStart, SkipWsBack(m, local.ValueEnd), depth + 1);
+                    return collection != null ? s.Model.ElementType(collection) : null;
+                }
+                case LocalKind.LambdaParameter:
+                    return local.Type != null ? s.Model.ResolveType(local.Type, s.Namespaces) : TypeOfLambdaParameter(s, local, depth + 1);
+                case LocalKind.Deconstructed:
+                {
+                    var value = TypeOfValue(s, local.ValueStart, SkipWsBack(m, local.ValueEnd), depth + 1);
+                    if (local.InForeach && value != null) value = s.Model.ElementType(value);
+                    return value != null ? s.Model.DeconstructedType(value, local.Index, local.Count) : null;
+                }
+                default:
+                    return null;
+            }
+        }
+
+        /// <summary>The type of a <c>var</c> initializer: <c>new T(…)</c>, <c>x as T</c>, <c>(T)x</c> or a chain.</summary>
+        private static object TypeOfValue(FileScope s, int start, int end, int depth)
+        {
+            string m = s.M;
+            if (WordAt(m, start) == "new")
+            {
+                int typeStart = SkipWs(m, start + 3);
+                int open = typeStart;
+                while (open < end && m[open] != '(' && m[open] != '{' && m[open] != '[') open++;
+                string type = m.Substring(typeStart, open - typeStart).Replace(" ", "");
+                return type.Length > 0 && open < end && m[open] != '[' ? s.Model.ResolveType(type, s.Namespaces) : null;
+            }
+            int asAt = LastIndexIn(m, " as ", start, end);
+            if (asAt > start && UnmatchedOpen(m, asAt) == UnmatchedOpen(m, start))
+                return s.Model.ResolveType(m.Substring(asAt + 4, end - asAt - 4).Replace(" ", ""), s.Namespaces);
+            if (m[start] == '(')
+            {
+                int close = MatchClose(m, start);
+                if (close > 0 && close < end && ChainEnd(m, SkipWs(m, close), out _) == end)
+                {
+                    var cast = s.Model.ResolveType(m.Substring(start + 1, close - start - 2).Replace(" ", ""), s.Namespaces);
+                    if (cast != null) return cast;
+                }
+            }
+            return ChainEnd(m, start, out _) == end ? TypeOfChain(s, start, end, depth) : null;
+        }
+
+        /// <summary>The element type of the sequence a LINQ-like call is made on, for its lambda's parameter.</summary>
+        private static object TypeOfLambdaParameter(FileScope s, Local local, int depth)
+        {
+            string m = s.M;
+            int open = UnmatchedOpen(m, local.Lambda);
+            if (open < 0 || m[open] != '(') return null;
+            int nameEnd = SkipWsBack(m, open);
+            if (nameEnd > 0 && m[nameEnd - 1] == '>')
+            {
+                int angle = MatchAngleOpen(m, nameEnd - 1);
+                if (angle < 0) return null;
+                nameEnd = SkipWsBack(m, angle);
+            }
+            string method = WordBefore(m, nameEnd);
+            int p = SkipWsBack(m, nameEnd - method.Length);
+            if (method.Length == 0 || p == 0 || m[p - 1] != '.') return null;
+            int receiverEnd = SkipWsBack(m, p > 1 && m[p - 2] == '?' ? p - 2 : p - 1);
+            int receiverStart = ChainStart(m, receiverEnd);
+            if (receiverStart < 0) return null;
+            var receiver = TypeOfChain(s, receiverStart, receiverEnd, depth);
+            var element = receiver != null ? s.Model.ElementType(receiver) : null;
+            if (element == null) return null;
+
+            int argument = TopLevelCommas(m, open + 1, local.Lambda);
+            if (method == "Aggregate")
+                return argument == 0 || local.Index == 1 ? element : null;
+            return ElementLambda.Contains(method) && local.Index == 0 ? element : null;
+        }
+
+        #endregion
 
         /// <summary>Whether the identifier at [start, end) is declared there: preceded by a type and followed by <c>= ; , ) in</c>.</summary>
         private static bool IsDeclarationName(string m, int start, int end)

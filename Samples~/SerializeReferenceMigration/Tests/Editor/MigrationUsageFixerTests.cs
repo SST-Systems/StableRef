@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using SST.StableRef.Migration;
 
@@ -56,6 +57,19 @@ namespace SST.StableRef.Tests
                 "Cannot convert type 'SST.StableRef.StableRef<IEffect>' to 'Burn'"));
             Assert.AreEqual("IEffect[] a = o.effects.ToArray();", Fix("IEffect[] a = o.effects;", "CS0029", "o.effects",
                 "Cannot implicitly convert type 'SST.StableRef.StableRefList<IEffect>' to 'IEffect[]'"));
+            Assert.AreEqual("IEffect[] a = f is Mode.Win\n    ? o.effects.ToArray()\n    : null;",
+                Fix("IEffect[] a = f is Mode.Win\n    ? o.effects\n    : null;", "CS0029", "f is",
+                    "Cannot implicitly convert type 'SST.StableRef.StableRefList<IEffect>' to 'IEffect[]'"),
+                "a conditional converted as a whole is reported at its condition: the branch converts");
+        }
+
+        [Test]
+        public void PropertyPattern_OnWrapper()
+        {
+            Assert.AreEqual("if (o.effects is { Count: > 0 }) { }", Fix("if (o.effects is { Length: > 0 }) { }", "CS0117", "Length",
+                "'StableRefList<IEffect>' does not contain a definition for 'Length'"));
+            Assert.AreEqual("if (o.effect.Value is { Power: > 0 }) { }", Fix("if (o.effect is { Power: > 0 }) { }", "CS0117", "Power",
+                "'StableRef<IEffect>' does not contain a definition for 'Power'"));
         }
 
         [Test]
@@ -136,12 +150,8 @@ namespace SST.StableRef.Tests
         [Test]
         public void SilentChecks_Ambiguous_AreListed_NotChanged()
         {
-            string shadowed = "class A { StableRef<IEffect> effect = new(); void M(IEffect effect) { if (effect != null) { } } }";
-            Assert.AreEqual(shadowed, Silent(shadowed, Fields(own: true, unique: true), out var review));
-            Assert.AreEqual(1, review.Count, "a parameter of the same name: can't tell");
-
             string qualified = "class B { void M(A a) { if (a.effect != null) { } } }";
-            Assert.AreEqual(qualified, Silent(qualified, Fields(own: false, unique: false), out review));
+            Assert.AreEqual(qualified, Silent(qualified, Fields(own: false, unique: false), out var review));
             Assert.AreEqual(1, review.Count, "another member has the name");
             Assert.AreEqual("class B { void M(A a) { if (a.effect.Value != null) { } } }",
                 Silent(qualified, Fields(own: false, unique: true), out review));
@@ -152,6 +162,114 @@ namespace SST.StableRef.Tests
         }
 
         [Test]
+        public void LocalOfTheSameName_HidesTheField_InItsScopeOnly()
+        {
+            string code = "class A { StableRef<IEffect> effect = new();\n" +
+                          "void Init(IEffect effect) { if (effect != null) { } }\n" +
+                          "void Show() { if (effect == null) { } foreach (var effect in list) { if (effect != null) { } } }\n" +
+                          "void Close() => Use(x => x.effect, effect is null); }";
+            string expected = "class A { StableRef<IEffect> effect = new();\n" +
+                              "void Init(IEffect effect) { if (effect != null) { } }\n" +
+                              "void Show() { if (effect.Value == null) { } foreach (var effect in list) { if (effect != null) { } } }\n" +
+                              "void Close() => Use(x => x.effect, effect.Value is null); }";
+            Assert.AreEqual(expected, Silent(code, Fields(own: true, unique: false), out var review));
+            Assert.IsEmpty(review, "a parameter or local of the same name is no field");
+        }
+
+        [Test]
+        public void MoreSilentUses_GetValue()
+        {
+            string code = "class A { StableRef<IEffect> effect = new(); void M(object o) {\n" +
+                          "var a = effect ?? o; bool b = effect == o; bool c = o != effect; int h = effect.GetHashCode();\n" +
+                          "int d = effect switch { null => 0, _ => 1 }; switch (effect) { case null: break; } } }";
+            string expected = "class A { StableRef<IEffect> effect = new(); void M(object o) {\n" +
+                              "var a = effect.Value ?? o; bool b = effect.Value == o; bool c = o != effect.Value; int h = effect.Value.GetHashCode();\n" +
+                              "int d = effect.Value switch { null => 0, _ => 1 }; switch (effect.Value) { case null: break; } } }";
+            Assert.AreEqual(expected, Silent(code, Fields(own: true, unique: false), out _));
+        }
+
+        private static MigrationTypeModel Model() => new(new[] { (typeof(SrOwner), "effect") },
+            new[] { typeof(MigrationUsageFixerTests).Assembly, typeof(object).Assembly, typeof(Enumerable).Assembly, typeof(List<>).Assembly });
+
+        /// <summary>The silent-use check for a field named <c>effect</c> that neither this file declares nor is unique: only types tell.</summary>
+        private static string Typed(string code, out List<string> review)
+        {
+            review = new List<string>();
+            var fields = new Dictionary<string, MigrationUsageFixer.Field> { ["effect"] = new() { Name = "effect" } };
+            return MigrationUsageFixer.FixSilentUses(code, fields, new List<string>(), review, Model());
+        }
+
+        private const string Usings = "using System.Collections.Generic; using System.Linq; using SST.StableRef.Tests;\n";
+
+        [Test]
+        public void ReceiverType_TellsTheField_FromAnotherOfTheSameName()
+        {
+            string code = Usings + "class C { void M(SrOwner a, SrOther b) { if (a.effect != null && b.effect != null) { } } }";
+            Assert.AreEqual(Usings + "class C { void M(SrOwner a, SrOther b) { if (a.effect.Value != null && b.effect != null) { } } }",
+                Typed(code, out var review));
+            Assert.IsEmpty(review, "b.effect is another type's field");
+        }
+
+        [Test]
+        public void ReceiverType_IsReadFromLocalsLoopsLambdasMembersAndCalls()
+        {
+            string code = Usings + "class C { void M(SrHolder h, List<SrOwner> list) {\n" +
+                          "var x = h.Owner; if (x.effect == null) { }\n" +
+                          "foreach (var o in h.owners) if (o.effect is SrBurn) { }\n" +
+                          "bool any = list.Where(w => w.effect != null).Skip(1).Any(v => v.effect is null);\n" +
+                          "float sum = list.Aggregate(0f, (acc, s) => s.effect == null ? acc : acc + 1);\n" +
+                          "if (h.Owner.Next().effect is null || list[0].effect != null || (h.Owner as SrOwner).effect == null) { }\n" +
+                          "if (h.Find(out SrOwner found) && found.effect != null) { } } }";
+            string expected = Usings + "class C { void M(SrHolder h, List<SrOwner> list) {\n" +
+                              "var x = h.Owner; if (x.effect.Value == null) { }\n" +
+                              "foreach (var o in h.owners) if (o.effect.Value is SrBurn) { }\n" +
+                              "bool any = list.Where(w => w.effect.Value != null).Skip(1).Any(v => v.effect.Value is null);\n" +
+                              "float sum = list.Aggregate(0f, (acc, s) => s.effect.Value == null ? acc : acc + 1);\n" +
+                              "if (h.Owner.Next().effect.Value is null || list[0].effect.Value != null || (h.Owner as SrOwner).effect.Value == null) { }\n" +
+                              "if (h.Find(out SrOwner found) && found.effect.Value != null) { } } }";
+            Assert.AreEqual(expected, Typed(code, out var review));
+            Assert.IsEmpty(review);
+        }
+
+        [Test]
+        public void ReceiverType_IsReadFromTheEnclosingType_ThroughAGenericBase()
+        {
+            string code = Usings + "class SrProcessor : SrProcessorBase<SrOwner> { bool M() => Data.effect?.GetType() == this.Data.effect?.GetType(); }";
+            Assert.AreEqual(Usings + "class SrProcessor : SrProcessorBase<SrOwner> { bool M() => Data.effect.Value?.GetType() == this.Data.effect.Value?.GetType(); }",
+                Typed(code, out _));
+        }
+
+        [Test]
+        public void Argument_ObjectOrTypeParameter_GetsValue_TypedIsLeftToTheCompiler()
+        {
+            string code = Usings + "class C { void M(SrOwner a) { SrSink.Take(a.effect); SrSink.Generic(a.effect); SrSink.Typed(a.effect); new SrBox(a.effect); Elsewhere.Call(a.effect); } }";
+            Assert.AreEqual(Usings + "class C { void M(SrOwner a) { SrSink.Take(a.effect.Value); SrSink.Generic(a.effect.Value); SrSink.Typed(a.effect); new SrBox(a.effect.Value); Elsewhere.Call(a.effect); } }",
+                Typed(code, out var review));
+            Assert.AreEqual(1, review.Count, "a call whose parameters can't be read is listed");
+        }
+
+        [Test]
+        public void ReceiverType_IsReadFromDeconstruction()
+        {
+            string code = Usings + "class C { void M(Dictionary<int, SrOwner> map, List<(int, SrOwner)> pairs) {\n" +
+                          "var (level, owner) = map.First(); if (owner.effect != null) { }\n" +
+                          "foreach (var (i, o) in pairs) if (o.effect is null) { } } }";
+            string expected = Usings + "class C { void M(Dictionary<int, SrOwner> map, List<(int, SrOwner)> pairs) {\n" +
+                              "var (level, owner) = map.First(); if (owner.effect.Value != null) { }\n" +
+                              "foreach (var (i, o) in pairs) if (o.effect.Value is null) { } } }";
+            Assert.AreEqual(expected, Typed(code, out var review));
+            Assert.IsEmpty(review);
+        }
+
+        [Test]
+        public void LocalHoldingTheWrapper_IsFixedToo()
+        {
+            string code = Usings + "class C { void M(SrOwner a) { var r = a.effect; if (r == null || r.GetType() == null) { } } }";
+            Assert.AreEqual(Usings + "class C { void M(SrOwner a) { var r = a.effect; if (r.Value == null || r.Value.GetType() == null) { } } }",
+                Typed(code, out _));
+        }
+
+        [Test]
         public void SharedMember_Value_ReachesTheValue()
         {
             string code = "class A { StableRef<Holder> effect = new(); int M() => effect.Value + effect.HasValue; }";
@@ -159,4 +277,29 @@ namespace SST.StableRef.Tests
                 Silent(code, Fields(own: true, unique: false, "Value", "HasValue"), out _));
         }
     }
+
+    // Types the silent-use tests read with reflection; SrOwner.effect is the retyped field.
+    public interface ISrEffect { }
+    public class SrBurn : ISrEffect { }
+    public class SrOwner
+    {
+        public ISrEffect effect;
+        public SrOwner Next() => null;
+    }
+    public class SrOther { public ISrEffect effect; }
+    public class SrHolder
+    {
+        public SrOwner Owner { get; set; }
+        public SrOwner[] owners;
+        public bool Find(out SrOwner owner) { owner = null; return false; }
+    }
+    public class SrProcessorBase<TData> { protected TData Data; }
+    public class SrProcessor : SrProcessorBase<SrOwner> { }
+    public static class SrSink
+    {
+        public static void Take(object value) { }
+        public static void Generic<T>(T value) { }
+        public static void Typed(ISrEffect effect) { }
+    }
+    public class SrBox { public SrBox(object value) { } }
 }
