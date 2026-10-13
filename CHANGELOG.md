@@ -1,5 +1,17 @@
 # StableRef
 
+## 4.2.3 - 13.10.2026
+
+### Changed
+
+- **The SerializeReference Migration sample gives every read of a retyped field `.Value` before the first compile, not only the silent ones.** Before the retype every read was the value, so where the field is surely the retyped one (its receiver's type declares it) the read keeps the value: `x.Apply()`, `x?.State`, `IEffect e = x`, `return x`, `Use(x)` — also when the call's parameter can't be found. Fewer compile rounds are left, and the compiler's messages only fix what the type couldn't be read for. A local initialized from the field (`var r = o.effect;`) now gets the value instead of the wrapper. Left alone: writes (`x = …`, turned into `.Set(…)` by the compiler's messages), the wrapper's own members, a parameter that takes a StableRef, `nameof(x)`, `ref` / `out` and named arguments, a type named like the field.
+
+### Fixed
+
+- **A property pattern on a retyped field matched the wrapper.** `o is { effect: null }` kept compiling but tested the wrapper, which is never null, so the condition silently became false. It is now `o is { effect: { Value: null } }` (C# 9 has no `effect.Value:`) when the pattern's type — written before it, the subject of `is` / `switch`, or the member of an enclosing pattern — declares the retyped field; a pattern of an unknown type is listed.
+- **An anonymous type kept the field's member name.** `new { o.effect }` would have become `new { o.effect.Value }` — a member named `Value`, breaking every `x.effect` after it; it is now `new { effect = o.effect.Value }`.
+- **More reads are recognized:** an extension method of the value called on the wrapper (`CS1929`), indexers by their own type (a dictionary's value, not its pair), switch-expression arms (`SrOwner so when …`), generic calls along a chain (`x.OfType<T>()`), types nested in the enclosing class; `=> name` and `a ?? name` are no longer taken for declarations. A list value over several lines in an object initializer is wrapped as it is (`new(` … `)`).
+
 ## 4.2.2 - 13.10.2026
 
 ### Added

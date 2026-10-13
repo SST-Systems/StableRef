@@ -176,6 +176,17 @@ namespace SST.StableRef.Migration
             return indexer?.PropertyType;
         }
 
+        public object IndexedType(object type)
+        {
+            if (type is not Type t) return null;
+            if (t.IsArray) return t.GetElementType();
+            if (t == typeof(string)) return typeof(char);
+            var indexers = Hierarchy(t).Concat(t.IsInterface ? t.GetInterfaces() : Type.EmptyTypes)
+                .SelectMany(h => h.GetProperties(Members)).Where(p => p.GetIndexParameters().Length == 1 && p.GetMethod is { IsPublic: true })
+                .Select(p => p.PropertyType).Distinct().ToList();
+            return indexers.Count == 1 ? indexers[0] : ElementType(type);
+        }
+
         public object Sequence(object element) => element is Type t ? typeof(IEnumerable<>).MakeGenericType(t) : null;
 
         public object DeconstructedType(object type, int index, int count)
