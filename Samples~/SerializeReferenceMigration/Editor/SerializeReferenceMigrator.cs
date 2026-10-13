@@ -128,8 +128,9 @@ namespace SST.StableRef.Migration
             var code = MigrationCodeRewriter.Plan(CodeRoots);
             string message = code.Changed
                 ? $"Changes the type of {code.ConvertedFields} [SerializeReference] field(s) in the scripts to StableRef<T> / " +
-                  "StableRefList<T> (same names). Code that reads such a field needs .Value — fix the compile errors; " +
-                  "once the scripts compile, the saved data is moved into the new layout, prefab overrides are rewritten " +
+                  "StableRefList<T> (same names). Code that uses such a field gets .Value where the compiler reports it " +
+                  "(and where it would silently test the wrapper); what is left is listed for a manual fix. " +
+                  "Once the scripts compile, the saved data is moved into the new layout, prefab overrides are rewritten " +
                   "and stable ids and snapshots are stamped.\n\n"
                 : "No [SerializeReference] fields left to rewrite in the scripts. Moves the data of fields already " +
                   "changed to StableRef<T> / StableRefList<T> into the new layout, rewrites prefab overrides and stamps " +
@@ -151,11 +152,11 @@ namespace SST.StableRef.Migration
             }
 
             string summary = CodeSummary(code, applied: true);
-            if (!MigrationContinuation.Begin(summary, code.ExpectedFields)) return;
+            if (!MigrationContinuation.Begin(summary, code.ExpectedFields, code.FieldNames)) return;
             MigrationCodeRewriter.Apply(code);
-            Debug.Log(summary + "\nWaiting for the scripts to compile; the data is migrated right after. " +
-                      "Code that reads a retyped field needs .Value — fix the compile errors; the data waits for the next " +
-                      "successful compile.");
+            Debug.Log(summary + "\nWaiting for the scripts to compile; the data is migrated right after. Code that uses a " +
+                      "retyped field is fixed by the compiler errors, round by round; what can't be fixed that way is " +
+                      "listed — fix it by hand, the data waits for the next successful compile.");
             AssetDatabase.Refresh();
         }
 
@@ -181,8 +182,8 @@ namespace SST.StableRef.Migration
         {
             var text = new StringBuilder();
             text.AppendLine(applied
-                ? $"[StableRef] Migration: rewrote {code.ConvertedFields} field(s), added {code.AddedTypeIds} [RefTypeId], {code.Files.Count} file(s) changed."
-                : $"[StableRef] Migration (dry run): {code.ConvertedFields} field(s) to rewrite in the scripts, {code.AddedTypeIds} [RefTypeId] to add, {code.Files.Count} file(s) to change.");
+                ? $"[StableRef] Migration: rewrote {code.ConvertedFields} field(s), fixed {code.FixedUses} use(s) that would test the wrapper, added {code.AddedTypeIds} [RefTypeId], {code.Files.Count} file(s) changed."
+                : $"[StableRef] Migration (dry run): {code.ConvertedFields} field(s) to rewrite in the scripts, {code.FixedUses} use(s) that would test the wrapper to fix, {code.AddedTypeIds} [RefTypeId] to add, {code.Files.Count} file(s) to change.");
             if (code.Changes.Count > 0) text.AppendLine("Code (" + code.Changes.Count + "):\n  " + string.Join("\n  ", code.Changes));
             if (code.Warnings.Count > 0) text.AppendLine("Code warnings (" + code.Warnings.Count + "):\n  " + string.Join("\n  ", code.Warnings));
             return text.ToString().TrimEnd();

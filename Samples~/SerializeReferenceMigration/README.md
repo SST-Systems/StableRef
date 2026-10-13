@@ -18,8 +18,9 @@ every asset into the new layout, follows prefab overrides and stamps every entry
 
 Only the type changes: the field keeps its name, its access and its other attributes, so its data stays under the
 same key. A single reference becomes `StableRef<T>`, an array or list `StableRefList<T>` (an `IList<T>`). Code that
-reads the value now needs `.Value` (`effect.Value.Apply()`, `effect.Set(new Burn())`) — the compiler lists those
-places, and the data waits until they are fixed.
+reads the value now needs `.Value` (`effect.Value.Apply()`, `effect.Set(new Burn())`): the migration adds it where
+the compiler reports an error, and where the code would compile but test the wrapper instead of the value
+(`effect != null`); what it can't fix is listed, and the data waits until the scripts compile.
 
 Why a tool is needed: Unity can't read the old data into the new field. It loads the field empty, keeps the old
 reference records only in the file, and drops them the first time the asset is saved. So the migration works on the
@@ -31,20 +32,21 @@ It ships as a sample rather than as part of the package: it is needed once per p
 
 - `SerializeReferenceMigrator` (namespace `SST.StableRef.Migration`) — the menu and the public API (`Analyze`, `Migrate`, `Run`).
 - `MigrationCodeRewriter` — retypes the declarations, adds `SST.StableRef` to assembly definitions and `[RefTypeId]` to value types without a stable ID.
+- `MigrationUsageFixer` — fixes the code that uses the retyped fields, as text: by the compiler's messages, and the uses the compiler accepts but that now test the wrapper.
 - `MigrationContinuation` — moves the data after the rewritten scripts compile.
 - `MigrationScenes` — closes and reopens the open scenes, resyncs the converted ones.
 - `MigrationYamlConverter`, `MigrationAssetIndex`, `MigrationFieldModel` — the text rewrite of one asset file, the types read from YAML, the fields that are StableRef.
 - `SST.StableRef.Migration.Editor` — the editor assembly they live in.
-- `Tests/` — EditMode tests (`SST.StableRef.Migration.Tests`, with test types in `SST.StableRef.Migration.TestTypes`): declaration rewrites, every kind of field in assets, a dry run, prefab variants, overrides of objects inside nested prefabs.
+- `Tests/` — EditMode tests (`SST.StableRef.Migration.Tests`, with test types in `SST.StableRef.Migration.TestTypes`): declaration rewrites, fixes of the uses, every kind of field in assets, a dry run, prefab variants, overrides of objects inside nested prefabs.
 
 ## Use it
 
 1. Commit or back up the project. The migration rewrites scripts and assets under `Assets/`.
 2. Import the sample: **Window → Package Manager → StableRef → Samples → SerializeReference Migration → Import**. If you installed StableRef by copying it into `Assets/`, copy the `Samples~/SerializeReferenceMigration` folder from the repository instead.
-3. **Tools → StableRef → Migrate SerializeReference Data → Analyze (Dry Run)** lists the fields that will be rewritten, the `[RefTypeId]` and assembly references that will be added, and warnings. Nothing is written.
-4. **Tools → StableRef → Migrate SerializeReference Data → Migrate…** You are asked to save modified scenes; open scenes are closed for the migration. The field types in the scripts are changed and Unity recompiles; fix the places that read the fields (`.Value`). Once the scripts compile, the data is moved, every converted scene is opened, resynced and saved, and the scenes you had open are reopened. The report goes to the console.
+3. **Tools → StableRef → Migrate SerializeReference Data → Analyze (Dry Run)** lists the fields that will be rewritten, the uses that would test the wrapper and will get `.Value`, the `[RefTypeId]` and assembly references that will be added, and warnings. Nothing is written.
+4. **Tools → StableRef → Migrate SerializeReference Data → Migrate…** You are asked to save modified scenes; open scenes are closed for the migration. The field types in the scripts are changed and Unity recompiles; the code that uses the fields is fixed by the compiler's messages, round after round. Once the scripts compile, the data is moved, every converted scene is opened, resynced and saved, and the scenes you had open are reopened. The report goes to the console.
 
-The compile errors after the rewrite are the code that uses the fields: reading a single reference needs `.Value`, assigning one `.Set(value)`, and a `List<T>` or array API that `StableRefList<T>` doesn't have (`.Length`, `AddRange`) needs replacing — fix them. Until then the old types stay loaded and the data stays readable; the data step runs by itself after the next successful compile, once the rewritten scripts are loaded (an editor started with compile errors and *Ignore* in the Safe Mode dialog runs the old scripts, so the data keeps waiting). A field you changed back by hand doesn't hold it up: its data is left as is and the report lists it. **Resume Pending Migration** in the same menu runs the data step right away, **Cancel Pending Migration** stops waiting.
+The compile errors after the rewrite are the code that uses the fields. After each compile the migration fixes the ones it can read — reading a single reference gets `.Value`, assigning one `.Set(value)` (`.Value =` when the value spans several lines), an object-initializer member `= new(value)`, a list's `.Length` becomes `.Count`, a list read as an array `.ToArray()` — and recompiles, until the scripts compile or a round fixes nothing. Each round also reaches the assemblies that depend on the fixed ones (they aren't compiled while their dependencies fail). An assembly definition under `Assets/` that now touches a StableRef type without referencing `SST.StableRef` (`CS0012`) gets the reference. What is left is listed in the console — fix it by hand. Until then the old types stay loaded and the data stays readable; the data step runs by itself after the next successful compile, once the rewritten scripts are loaded (an editor started with compile errors and *Ignore* in the Safe Mode dialog runs the old scripts, so the data keeps waiting). A field you changed back by hand doesn't hold it up: its data is left as is and the report lists it. **Resume Pending Migration** in the same menu runs the data step right away, **Cancel Pending Migration** stops waiting.
 
 Fields you already changed to `StableRef<T>` / `StableRefList<T>` by hand (same name, or with `[FormerlySerializedAs]`) are picked up by the data step as well.
 
@@ -59,6 +61,8 @@ To run the tests, open **Window → General → Test Runner → EditMode** and r
 - Every `[SerializeReference]` field declared in a script under `Assets/` is retyped in place (scripts of packages are not touched — their assets would stay in the old layout): `T` → `StableRef<T>`, `T[]` / `List<T>` → `StableRefList<T>`. The name, the access modifiers and the other attributes stay; no field, property or `[FormerlySerializedAs]` is added.
 - `[SerializeReference]` is removed from a public field and replaced with `[SerializeField]` on a non-public one (unless it already has it). `[field: SerializeReference]` auto-properties get `[field: SerializeField]` and keep their accessors. Attributes of plain references and array drawers (`[SubclassSelector]`, `[ListDrawerSettings]`…) are dropped. An initializer is wrapped (`= new Burn()` → `= new(new Burn())`). A field without one gets `= new()` in a plain class — an object made with `new` would otherwise hold a null wrapper and `.Value` would throw; components, ScriptableObjects (Unity creates the wrapper) and structs (no field initializers in C# 9) stay without one.
 - `SST.StableRef` is added to the assembly definitions of the changed scripts, and `using SST.StableRef;` to the scripts.
+- Uses of the fields that would compile but now test or read the wrapper get `.Value` before the first compile: `effect != null`, `null == effect`, `effect is null` / `is { }` / `is Burn`, `effect as Burn`, `effect = null`, `ReferenceEquals(effect, …)`, `effect.GetType()`, `effect.Equals(…)`, and `effect.Value` / `effect.HasValue` when the value type has a member of that name — `effect.Value` would now be the wrapper's value, not the value's own `Value` (it becomes `effect.Value.Value`). A use is changed only when the name surely means the field: `effect` / `this.effect` in the scripts of the declaring class and its subclasses (unless the file also declares a local or parameter of that name), `x.effect` when no other field or property of any type has that name. Other such uses are listed as warnings. Lists are left alone: a `StableRefList<T>` is never null, which is what such checks guarded.
+- Assembly definitions that reference an assembly whose public API has StableRef types — a package's, or one with retyped public fields — but not `SST.StableRef` are listed: code there that uses those members fails with `CS0012`.
 - Value types without a stable ID — classes that share a file, so they can't use the script's GUID — get `[RefTypeId("Namespace.Type")]`. Only types the selector would offer get one (concrete classes with a parameterless constructor); for fields of type `object` none are added — add them by hand (reported).
 - Left out: fields with `[RefSelector]` (plain references on purpose), fields of generic parameter types, fields in StableRef's own assemblies, declarations spread over several lines or declaring several fields at once (reported).
 
@@ -96,7 +100,7 @@ migration does, as a one-time action you confirm.
 
 ## Limitations
 
-- **Code that uses the fields is not rewritten.** Reading a value needs `.Value`, assigning one `.Set(value)`; `List<T>` or array members `StableRefList<T>` doesn't have (`.Length`, `AddRange`, `ToArray`…) and assigning a `List<T>` / array need replacing. The compiler lists the places; the data waits for them, see above.
+- **Uses of the fields are fixed only where they can be read reliably.** Lists of the remaining compile errors go to the console: e.g. `List<T>` / array members `StableRefList<T>` doesn't have (`Sort`, `ConvertAll`, `Array.Resize`), a value passed where the method now needs the wrapper, or a multi-line value in an object initializer. Silent uses (`!= null`, `is`) are changed only where the name surely means the field; the others are listed as warnings — check them. Calls like `Debug.Log(effect)` or `string.Format` get the wrapper silently and are not found (the wrapper's `ToString()` is the value's, so logs stay the same).
 - **Editor code that finds a converted field by name** (`FindProperty("effect")`) now reaches the StableRef wrapper, whose value is `effect.Value`; the dry run and the report list such places.
 - **Reflection on the field's type and custom drawers of the old field** need a manual look: the field's type is the wrapper now.
 - **Assets with unsaved changes are skipped** by the data step; the report lists them. From the menu you are asked whether to discard unsaved in-memory changes instead.
