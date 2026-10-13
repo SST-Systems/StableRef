@@ -162,10 +162,10 @@ namespace SST.StableRef.Tests
         }
 
         [Test]
-        public void Initializer_IsAddedOnlyWhereUnityWouldLeaveTheFieldNull()
+        public void Initializer_IsAddedToEveryClass_NotToStructs()
         {
             Assert.IsTrue(MigrationCodeRewriter.NeedsInitializer(typeof(Candidate)), "a plain class made with new");
-            Assert.IsFalse(MigrationCodeRewriter.NeedsInitializer(typeof(MigrationTestAsset)), "Unity creates it for a ScriptableObject");
+            Assert.IsTrue(MigrationCodeRewriter.NeedsInitializer(typeof(MigrationTestAsset)), "a ScriptableObject made with CreateInstance is used before Unity serializes it");
             Assert.IsFalse(MigrationCodeRewriter.NeedsInitializer(typeof(StructCandidate)), "a struct can't have field initializers in C# 9");
         }
 

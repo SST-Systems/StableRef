@@ -1,5 +1,11 @@
 # StableRef
 
+## 4.2.4 - 13.10.2026
+
+### Fixed
+
+- **The SerializeReference Migration sample gives a retyped field of a component or ScriptableObject `= new()` too.** It was added only in plain classes, on the assumption that Unity creates the wrapper for components and ScriptableObjects. It does so only when it deserializes them: an object made in code (`AddComponent`, `ScriptableObject.CreateInstance`) and used before it is serialized held a null wrapper, and the first `.Value` threw a `NullReferenceException` where the old field had simply been null. Now every class gets the initializer; for a loaded asset Unity overwrites the field anyway. Struct fields still stay without one (C# 9 has no field initializers in structs).
+
 ## 4.2.3 - 13.10.2026
 
 ### Changed
