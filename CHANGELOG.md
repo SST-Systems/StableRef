@@ -1,5 +1,11 @@
 # StableRef
 
+## 4.2.6 - 14.10.2026
+
+### Breaking
+
+- **The Newtonsoft.Json Converter sample: `StableRefJsonConverter(bool replaceLists)` is removed, lists are always replaced.** Reading a `StableRefList<T>` now replaces its content like a `T[]` field, regardless of `ObjectCreationHandling`; it used to follow `List<T>` semantics and append unless `ObjectCreationHandling.Replace` or `replaceLists: true` was set. Lists migrated from `[SerializeReference]` were almost always arrays, and populating an existing object (e.g. remote JSON read straight into a config asset) appended and duplicated elements — the default `ObjectCreationHandling.Auto` means appending and can't be told apart from a deliberate choice. Elements that keep their type still keep their stable ID. Replace `new StableRefJsonConverter(replaceLists: true)` with `new StableRefJsonConverter()`; code that relied on appending has to add the elements itself.
+
 ## 4.2.5 - 14.10.2026
 
 ### Changed

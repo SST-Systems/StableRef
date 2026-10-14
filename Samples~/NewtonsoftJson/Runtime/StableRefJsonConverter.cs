@@ -8,7 +8,7 @@ namespace SST.StableRef.Json
 {
     /// <summary>
     /// Newtonsoft.Json converter for <see cref="StableRef{T}"/> and <see cref="StableRefList{T}"/>: a field holding
-    /// a wrapper reads and writes exactly the JSON of the same field declared as a bare <c>T</c> / <c>List&lt;T&gt;</c>.
+    /// a wrapper reads and writes exactly the JSON of the same field declared as a bare <c>T</c> / <c>T[]</c>.
     /// The stable id and snapshot are editor metadata and never appear in JSON.
     /// </summary>
     /// <remarks>
@@ -17,10 +17,10 @@ namespace SST.StableRef.Json
     /// declared type, so <see cref="TypeNameHandling.Auto"/>, converters registered for <c>T</c> and
     /// <see cref="JsonSerializer.Populate(JsonReader, object)"/> into an existing value behave as for a bare field.
     /// A <c>null</c> token empties the wrapper or the list — unlike a bare field, the field keeps its instance, so
-    /// code reading it never meets <see langword="null"/>. A list follows
-    /// <see cref="JsonSerializer.ObjectCreationHandling"/> like <c>List&lt;T&gt;</c> — appends to an existing list
-    /// unless set to <see cref="ObjectCreationHandling.Replace"/>; pass <c>replaceLists: true</c> to replace the
-    /// content every time, like a <c>T[]</c> field (use it when the fields were arrays before).</para>
+    /// code reading it never meets <see langword="null"/>. Reading a list always replaces its content, like a
+    /// <c>T[]</c> field, regardless of <see cref="JsonSerializer.ObjectCreationHandling"/> — populating an existing
+    /// object never appends (lists migrated from <c>[SerializeReference]</c> were almost always arrays, and the default
+    /// <see cref="ObjectCreationHandling.Auto"/> would append and duplicate elements).</para>
     /// <para>Values are assigned through <see cref="StableRefBase.BoxedValue"/> and the boxed list methods, so
     /// entries are reused: an entry whose value keeps its type keeps its stable id. The snapshot can only be
     /// refreshed by the editor — after deserializing into assets in the editor, run
@@ -43,19 +43,6 @@ namespace SST.StableRef.Json
         {
             LegacyValue, LegacyTypeId, "TypeDisplayName", "ObjectRefs", "ObjectRefPaths", "ValuesData", "$type", "$id"
         };
-
-        private readonly bool _replaceLists;
-
-        /// <summary>Creates the converter with <see cref="List{T}"/> semantics for lists.</summary>
-        public StableRefJsonConverter() { }
-
-        /// <summary>Creates the converter.</summary>
-        /// <param name="replaceLists">
-        /// <see langword="true"/>: reading a list always replaces its content, like a <c>T[]</c> field, regardless of
-        /// <see cref="JsonSerializer.ObjectCreationHandling"/> — populating an existing object never appends.
-        /// <see langword="false"/>: <see cref="List{T}"/> semantics.
-        /// </param>
-        public StableRefJsonConverter(bool replaceLists) => _replaceLists = replaceLists;
 
         /// <inheritdoc/>
         public override bool CanConvert(Type objectType)
@@ -88,7 +75,7 @@ namespace SST.StableRef.Json
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
         {
             if (StableRefReflection.IsStableRefList(objectType, out var elementType))
-                return ReadList(reader, objectType, elementType, existingValue as StableRefListBase, serializer, _replaceLists);
+                return ReadList(reader, objectType, elementType, existingValue as StableRefListBase, serializer);
 
             return ReadEntry(reader, objectType, existingValue as StableRefBase, serializer);
         }
@@ -132,7 +119,7 @@ namespace SST.StableRef.Json
         }
 
         private static StableRefListBase ReadList(JsonReader reader, Type objectType, Type elementType,
-            StableRefListBase existing, JsonSerializer serializer, bool replaceLists)
+            StableRefListBase existing, JsonSerializer serializer)
         {
             if (reader.TokenType == JsonToken.Null)
             {
@@ -161,21 +148,9 @@ namespace SST.StableRef.Json
                 }
             }
 
-            var list = existing ?? (StableRefListBase)Activator.CreateInstance(objectType);
-            bool replace = existing == null || replaceLists
-                || serializer.ObjectCreationHandling == ObjectCreationHandling.Replace;
-
             // Replacing reuses the existing list and its entries by index, so unchanged types keep their stable ids.
-            if (replace)
-            {
-                list.SetBoxedValues(values);
-            }
-            else
-            {
-                foreach (var value in values)
-                    list.AddBoxed(value);
-            }
-
+            var list = existing ?? (StableRefListBase)Activator.CreateInstance(objectType);
+            list.SetBoxedValues(values);
             return list;
         }
 
