@@ -33,8 +33,6 @@ settings.Converters.Add(new StableRefJsonConverter());
 var json = JsonConvert.SerializeObject(config, settings);
 ```
 
-For fields that used to be `T[]`, create it as `new StableRefJsonConverter(replaceLists: true)` — see [Reading a list](#reading-a-list).
-
 ## How it works
 
 ### Writing
@@ -49,10 +47,9 @@ empties the wrapper, but the field itself is never set to `null`.
 
 ### Reading a list
 
-Each element is read as a `T`. An existing list is appended to, like a `List<T>`, unless `ObjectCreationHandling` is
-`Replace` or the converter was created with `replaceLists: true` — then its content is replaced. Use `replaceLists`
-for fields that used to be arrays: Newtonsoft always replaced them, so populating an existing object didn't
-duplicate elements.
+Each element is read as a `T`. The list's content is always replaced, like a `T[]` field's, whatever
+`ObjectCreationHandling` says: populating an existing object (for example, a config asset from remote JSON) never
+appends elements and never duplicates them. Elements that keep their type keep their stable ID.
 
 ### JSON written without the converter
 

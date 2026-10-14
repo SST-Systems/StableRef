@@ -132,32 +132,31 @@ namespace SST.StableRef.Tests
             Assert.AreEqual(42, ((Fire)wrapped.Effect.Value).Damage);
         }
 
-        [Test]
-        public void List_FollowsObjectCreationHandling()
+        [TestCase(ObjectCreationHandling.Auto)]
+        [TestCase(ObjectCreationHandling.Reuse)]
+        [TestCase(ObjectCreationHandling.Replace)]
+        public void List_AlwaysReplaces_RegardlessOfObjectCreationHandling(ObjectCreationHandling handling)
         {
+            var settings = Auto();
+            settings.ObjectCreationHandling = handling;
             var config = new WrappedConfig { Effects = { new Fire() } };
-            JsonConvert.PopulateObject("{\"Effects\":[{\"$type\":\"" + Name<Ice>() + "\"}]}", config, Auto());
-            Assert.AreEqual(2, config.Effects.Count, "appends by default, like List<T>");
 
-            var replace = Auto();
-            replace.ObjectCreationHandling = ObjectCreationHandling.Replace;
-            JsonConvert.PopulateObject("{\"Effects\":[{\"$type\":\"" + Name<Ice>() + "\"}]}", config, replace);
-            Assert.AreEqual(1, config.Effects.Count);
+            JsonConvert.PopulateObject("{\"Effects\":[{\"$type\":\"" + Name<Ice>() + "\"}]}", config, settings);
+
+            Assert.AreEqual(1, config.Effects.Count, "replaced like T[], not appended");
+            Assert.IsInstanceOf<Ice>(config.Effects[0]);
         }
 
         [Test]
-        public void ReplaceLists_PopulateReplacesLikeArray_AndKeepsIdsOfSameType()
+        public void List_PopulateKeepsIdsOfSameType()
         {
-            var settings = new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.Auto };
-            settings.Converters.Add(new StableRefJsonConverter(replaceLists: true));
-
             var config = new WrappedConfig { Effects = { new Fire(), new Ice() } };
             config.Effects.Items[0].TypeId = "fire-id";
             config.Effects.Items[1].TypeId = "ice-id";
 
             JsonConvert.PopulateObject(
                 "{\"Effects\":[{\"$type\":\"" + Name<Fire>() + "\",\"Damage\":9},{\"$type\":\"" + Name<Fire>() + "\"}]}",
-                config, settings);
+                config, Auto());
 
             Assert.AreEqual(2, config.Effects.Count, "replaced, not appended");
             Assert.AreEqual(9, ((Fire)config.Effects[0]).Damage);
