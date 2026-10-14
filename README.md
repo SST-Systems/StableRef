@@ -55,7 +55,7 @@ Unity 2021.3+
 
 ## The problem it solves
 
-Unity's built-in `[SerializeReference]` stores the full assembly-qualified type name. If you rename or move a class, Unity loses the reference and the field becomes `null`. `StableRef` decouples the serialized identity from the class name by letting you assign a permanent ID via `[RefTypeId]`.
+Unity's built-in `[SerializeReference]` stores the full type name. If you rename or move a class, Unity loses the reference and the field becomes `null`. `StableRef` stores a permanent type ID instead, so the class can be renamed freely.
 
 ---
 
@@ -64,11 +64,11 @@ Unity's built-in `[SerializeReference]` stores the full assembly-qualified type 
 | Type | Purpose |
 |---|---|
 | `StableRef<T>` | Serializable wrapper holding a single polymorphic reference of type `T`. |
-| `StableRefList<T>` | Serializable list of rename-safe values: an `IList<T>` of the values, each stored in its own `StableRef<T>` entry. |
+| `StableRefList<T>` | Serializable list of rename-safe values, usable as an `IList<T>`. |
 | `[RefTypeId("id")]` | Assigns a permanent ID to a class. Rename the class freely — Unity will still find it. |
 | `[assembly: RefTypeIdFor(typeof(T), "id")]` | The same for a type you can't edit — another package, a DLL, generated code. |
 | `[RefCategory("Path")]` | Groups the type under a submenu in the inspector selector. |
-| `[RefSelector]` | Editor-only: the same selector on a plain `[SerializeReference]` field, with no wrapper and no rename protection. |
+| `[RefSelector]` | The same selector on a plain `[SerializeReference]` field, with no wrapper and no rename protection. |
 
 ---
 
@@ -86,18 +86,16 @@ public class DamageOnHit : IEffect
 }
 ```
 
-The `[RefTypeId]` value must be unique across the project. Use a namespaced string to avoid collisions. The attribute is **not inherited**: a class derived from `DamageOnHit` needs its own `[RefTypeId]` (or its own script file, see [Auto-generated ID](#auto-generated-id)) — otherwise it has no stable ID and isn't offered in the selector.
+The `[RefTypeId]` value must be unique across the project — use a namespaced string. The attribute is **not inherited**: a derived class needs its own `[RefTypeId]` (or its own script file, see [Auto-generated ID](#auto-generated-id)).
 
 ### Using StableRef\<T\> in a field
 
 ```csharp
-[Serializable]
 public class ItemConfig : ScriptableObject
 {
     public StableRef<IEffect> OnPickup;
 }
 
-// Reading and writing
 if (config.OnPickup.HasValue)
     config.OnPickup.Value.Apply();
 
@@ -105,37 +103,28 @@ config.OnPickup.Set(new DamageOnHit { Amount = 5 });
 config.OnPickup = new StableRef<IEffect>(new DamageOnHit { Amount = 5 });
 ```
 
-`Set` keeps the entry's stable ID when the new value has the same type as the old one and resets the metadata when the type changes, so no ID of another type is left behind. Writing `.Value` directly works too but leaves the metadata as it was.
-
-There are no implicit conversions between `StableRef<T>` and `T`: C# ignores user-defined conversions to and from interfaces, and `T` is usually an interface, so they would work for some fields and not for others. Use `.Value` and the constructor.
+Prefer `Set` over writing `.Value` directly: it keeps the stored ID up to date when the value's type changes. There are no implicit conversions between `StableRef<T>` and `T` — use `.Value` and the constructor.
 
 ### Using StableRefList\<T\>
 
 ```csharp
-[Serializable]
 public class AbilityConfig : ScriptableObject
 {
     public StableRefList<IEffect> Effects;
 }
 
-// Iteration — values, no allocation
-foreach (var effect in config.Effects)
+foreach (var effect in config.Effects)   // values, no allocation
     effect?.Apply();
-```
 
-`StableRefList<T>` is an `IList<T>` and `IReadOnlyList<T>` of the values themselves: indexing, `foreach` and LINQ (`OfType`, `Any`, `Select`, ...) work with `T`, and the list can be passed wherever an `IEnumerable<T>` / `IReadOnlyList<T>` is expected. `foreach` uses a struct enumerator and doesn't allocate. The `List<T>`-like API is there too — `Add`, `AddRange`, `Insert`, `Remove`, `RemoveAt`, `RemoveAll`, `Clear`, `Contains`, `IndexOf`, `Find`, `ToArray`, and so on:
-
-```csharp
 config.Effects.Add(new DamageOnHit { Amount = 5 });
 config.Effects.RemoveAll(e => e is DamageOnHit);
 var damage = config.Effects.OfType<DamageOnHit>().Sum(d => d.Amount);
 config.Effects[0] = new Heal();
-var rewards = new StableRefList<IReward>(otherRewards);
 ```
 
-Each value is stored in its own `StableRef<T>` entry, which keeps the stable ID and the snapshot; `Items` exposes those entries (`List<StableRef<T>>`). Assigning through the indexer reuses the entry like `Set`: a value of the same type keeps the stable ID, a value of another type resets it.
+`StableRefList<T>` is an `IList<T>` / `IReadOnlyList<T>` of the values: indexer, `foreach`, LINQ and the familiar `List<T>` methods work with `T`. The underlying entries are available through `Items`.
 
-When you build a list from an **editor script** rather than the inspector, call `StableRefResync.ResyncObject(asset)` before saving so the new entries receive their stable IDs and snapshots (the inspector does this automatically when a field is drawn) — see [Reflection and serializers](#reflection-and-serializers).
+When you fill a list from an **editor script**, call `StableRefResync.ResyncObject(asset)` before saving (see [Reflection and serializers](#reflection-and-serializers)).
 
 <p align="center">
   <img src="Documentation~/inspector.gif" alt="Adding a type via the typed dropdown" width="580">
@@ -143,60 +132,54 @@ When you build a list from an **editor script** rather than the inspector, call 
 
 ### Copying owners: MemberwiseClone
 
-`StableRef<T>` and `StableRefList<T>` are classes. An owner cloned with `MemberwiseClone` shares them with the original, so `clone.OnPickup.Value = x` changes the original too — unlike a bare `[SerializeReference] T` field, where the same line only changes the clone. Give the clone its own wrappers:
+The wrappers are classes, so an owner cloned with `MemberwiseClone` shares them with the original — changing the clone's value changes the original too. Give the clone its own wrappers:
 
 ```csharp
 public Effect ShallowClone()
 {
     var clone = (Effect)MemberwiseClone();
-    clone.Modifier = Modifier.ShallowCopy();   // StableRef<T>: new wrapper, same value instance
-    clone.Children = Children.ShallowCopy();   // StableRefList<T>: new entries, same value instances
+    clone.Modifier = Modifier.ShallowCopy();   // new wrapper, same value instance
+    clone.Children = Children.ShallowCopy();   // new list, same value instances
     return clone;
 }
 ```
 
-Deep copies of the values are up to you: `JsonUtility` doesn't follow `[SerializeReference]`.
-
 ### Reflection and serializers
 
-Code that only knows a field's `Type` at run time — reflection-based config loaders, custom serializers — can read and write StableRef fields without the generic argument:
+Code that knows a field's type only at run time (config loaders, custom serializers) can use the non-generic API:
 
 ```csharp
 if (StableRefReflection.IsStableRef(field.FieldType, out var valueType))
 {
     var entry = (StableRefBase)(field.GetValue(owner) ?? Activator.CreateInstance(field.FieldType));
-    entry.BoxedValue = Convert(cell, valueType);          // type-checked, throws ArgumentException on mismatch
+    entry.BoxedValue = Convert(cell, valueType);
     field.SetValue(owner, entry);
 }
 else if (StableRefReflection.IsStableRefList(field.FieldType, out var elementType))
 {
     var list = (StableRefListBase)(field.GetValue(owner) ?? Activator.CreateInstance(field.FieldType));
-    list.SetBoxedValues(ConvertArray(cell, elementType)); // checks every element before changing the list
+    list.SetBoxedValues(ConvertArray(cell, elementType));
     field.SetValue(owner, list);
 }
 ```
 
-`StableRefBase` has `ValueBaseType`, `BoxedValue`, `HasValue`; `StableRefListBase` has `ElementType`, `Count`, `GetBoxed`, `SetBoxed`, `AddBoxed`, `SetBoxedValues`, `Clear`. `field.SetValue(owner, value)` with a bare value doesn't work — reflection never applies conversions.
+`StableRefBase` has `BoxedValue`, `ValueBaseType`, `HasValue`; `StableRefListBase` has `ElementType`, `Count`, `GetBoxed`, `SetBoxed`, `AddBoxed`, `SetBoxedValues`, `Clear`. Setters check the type and throw `ArgumentException` on a mismatch.
 
-`BoxedValue`, `SetBoxed` and `SetBoxedValues` reuse entries like `Set` (`SetBoxedValues` by index), so writing a config whose types didn't change keeps the stable IDs.
-
-**Writing into assets in the editor.** Code can't capture the snapshot, and for a value of a new type it can't stamp the ID either — the inspector does that when the field is drawn. A tool that writes values into assets in the editor (a config importer, a baker, a reserialize tool) should call `StableRefResync.ResyncObject(asset)` on every changed object before saving, or run **Tools → StableRef → Resync All** afterwards (see [Editor tools](#editor-tools)). Otherwise the snapshot keeps describing the previous values, and recovery after a class rename would bring those back.
+**Writing into assets in the editor.** Only the inspector can record a value's recovery data. A tool that writes values into assets (an importer, a generator) should call `StableRefResync.ResyncObject(asset)` before saving, or run **Tools → StableRef → Resync All** afterwards — otherwise a later class rename can't be recovered correctly.
 
 **Newtonsoft.Json:** a ready converter ships as a sample — [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.md).
 
 ### Generic value types
 
-The selector also supports closed generic element types. For a field like `StableRefList<ICondition<Unit>>`, open generic definitions that satisfy it (e.g. `All<TContext>`, `Any<TContext>`) are offered and closed with the field's own argument (`All<Unit>`). Each type used as a generic argument needs its own stable ID — its own file, or `[RefTypeId]` — just like any other StableRef type.
+For a field like `StableRefList<ICondition<Unit>>` the selector offers matching generic types closed with the field's argument (`All<Unit>`, `Any<Unit>`). Each type used as a generic argument needs its own stable ID, like any other StableRef type.
 
-The selector's gear button holds its settings: size, *Category in Label*, and *Deep Search* (off by default). With Deep Search on, the search also matches the name of the script file that declares each type, so `Conditions` finds `HeroUnlockData` declared in `Conditions.cs`, along with every other class of that file. It needs an index of the source files of the types' assemblies: it is built once per domain reload in the background, starting when the selector opens. Until it is ready, the search matches type names only.
+The selector's gear button holds its settings: size, *Category in Label* and *Deep Search*. With Deep Search on, the search also matches the script file name, so `Conditions` finds every class declared in `Conditions.cs`.
 
 ### Selector without a wrapper: [RefSelector]
 
-When you want only the inspector selector — no wrapper type, no stored id, nothing extra in serialized data or in the build — mark a plain `[SerializeReference]` field with `[RefSelector]`:
+When you want only the inspector selector — no wrapper, no stored ID, nothing extra in the data — mark a plain `[SerializeReference]` field with `[RefSelector]`:
 
 ```csharp
-using SST.StableRef;
-
 public class EffectAuthoring : MonoBehaviour
 {
     [SerializeReference, RefSelector] private IEffect _onPickup;
@@ -204,87 +187,77 @@ public class EffectAuthoring : MonoBehaviour
 }
 ```
 
-The field stays an ordinary `[SerializeReference]`: code reads `_onPickup` directly (no `.Value`), and the attribute is `[Conditional("UNITY_EDITOR")]`, so it is not even emitted into player builds. This is useful for ECS authoring/baking code, for existing `[SerializeReference]` fields you don't want to migrate (to migrate them with their data, see the [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.md) sample), and for large lists where per-entry metadata isn't worth it. The selector offers every instantiable type, including types without a stable id; copy/paste from the context menu works as usual.
+The field stays an ordinary `[SerializeReference]` (no `.Value`), and the attribute doesn't reach player builds. Useful for ECS authoring, for existing fields you don't want to migrate, and for large lists where per-entry metadata isn't worth it. To migrate existing fields with their data, see the [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.md) sample.
 
-> **Use at your own risk.** `[RefSelector]` fields have **no rename protection**: renaming or moving the value's class breaks the reference exactly as with a bare `[SerializeReference]`. They are deliberately **not** covered by **Find Usages** or **Fix Missing Types**. A field whose class is gone simply shows an empty selector (`None`) and can be replaced without confirmation. To rename a class safely, add Unity's `[MovedFrom]` (`UnityEngine.Scripting.APIUpdating`) to it. If you need refactor-proof, tracked references, use `StableRef<T>`.
+> **Use at your own risk.** `[RefSelector]` fields have **no rename protection** and are not covered by **Find Usages** or **Fix Missing Types**. To rename such a class safely, add Unity's `[MovedFrom]` to it.
 
 ---
 
 ## Auto-generated ID
 
-`[RefTypeId]` is optional. If omitted, StableRef automatically uses the **MonoScript GUID** (the `guid` value from the `.meta` file) as the stable identifier. This means:
+`[RefTypeId]` is optional. Without it, StableRef uses the script file's GUID (from its `.meta`) as the ID:
 
-- **Class rename** — safe. The GUID is tied to the file, not the class name.
-- **Script file rename or move** — also safe. Unity's meta file travels with the asset and its GUID does not change.
-- **Deleting and recreating the file** — the reference is lost (resolves to `null`), but handled gracefully. The project continues to work; the missing type will appear in the Fix Missing Types report.
+- **Class rename** — safe.
+- **Script file rename or move** — safe, the GUID doesn't change.
+- **Deleting and recreating the file** — the reference is lost; the entry shows up in Fix Missing Types.
 
-For types you plan to refactor heavily, an explicit `[RefTypeId]` is more reliable since it survives even if the script file is deleted and re-created.
+For types you plan to refactor heavily, an explicit `[RefTypeId]` is more reliable. Switching an existing type to `[RefTypeId]` is safe: old data keeps resolving and is updated to the new ID when drawn in the inspector or by **Tools → StableRef → Resync All**.
 
-Switching a type from an auto-generated ID to an explicit `[RefTypeId]` is safe and does **not** create missing references. The explicit ID takes priority, and existing references migrate automatically — the stored ID is rewritten from the MonoScript GUID to your custom ID the next time the field is drawn in the inspector, or for all assets at once with **Tools → StableRef → Resync All**. Until then the old GUID still resolves (the script file is unchanged), so nothing goes missing. If you're adding the attribute specifically to prepare for a heavy refactor (deleting and recreating the file), run Resync All first so the new ID is locked in.
-
-> **Important:** don't put multiple classes in a single script file. Automatic ID generation relies on the MonoScript GUID, which is assigned to the file rather than the class — with multiple classes per file, ID generation will not work correctly.
+> **Important:** keep one class per script file — the GUID belongs to the file, not to the class.
 
 ### Types you can't edit: RefTypeIdFor
 
-A type from another package, a precompiled DLL or a source generator can't take `[RefTypeId]`, and often has no MonoScript of its own. Give it an ID at assembly level, in any assembly of your project:
+A type from another package, a DLL or a source generator can't take `[RefTypeId]`. Give it an ID at assembly level, in any assembly of your project:
 
 ```csharp
-using SST.StableRef;
-
 [assembly: RefTypeIdFor(typeof(ThirdParty.Effects.Burn), "my-game.third-party.burn")]
 [assembly: RefTypeIdFor(typeof(ThirdParty.Conditions.All<>), "my-game.third-party.all")]
 ```
 
-- **Priority:** `[RefTypeId]` on the type → `RefTypeIdFor` → MonoScript GUID. Mapping a type that already has `[RefTypeId]` is an error; the attribute wins.
-- **Generics:** map the open definition (`All<>`); closed types get a composite ID from the definition and their arguments, as usual.
-- **Uniqueness:** the same rules as for `[RefTypeId]`. An ID used twice (by mappings, or by a mapping and a `[RefTypeId]`), or a type mapped to two IDs, is logged as an error on load.
-- Switching such a type from its GUID to a mapped ID is safe, exactly like adding `[RefTypeId]` (see above).
-- The attribute is editor-only metadata (`[Conditional("UNITY_EDITOR")]`); nothing reaches player builds.
-
-For a source-generated `partial` class you can also put `[RefTypeId]` on your own `partial` declaration of it.
+- **Priority:** `[RefTypeId]` on the type → `RefTypeIdFor` → script GUID.
+- **Generics:** map the open definition (`All<>`).
+- **Uniqueness:** the same rules as for `[RefTypeId]`; duplicates are logged as errors.
 
 ---
 
 ## Samples
 
-Import via **Window → Package Manager → StableRef → Samples**. Each sample has its own README with the setup and a description of how it works.
+Import via **Window → Package Manager → StableRef → Samples**.
 
 | Sample | What it shows |
 |---|---|
-| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.md) | `StableRef<T>` / `StableRefList<T>` fields read and write exactly the JSON of bare `T` / `List<T>` fields — for remote configs, saves and server payloads; JSON written without the converter stays readable; `StableRefJson.DataEquals` tells whether incoming data differs from the loaded one. Requires Newtonsoft.Json. |
-| [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.md) | Switching a project from `[SerializeReference]` fields to StableRef with one button: the field types are changed in place (same names, no extra fields), then the saved data moves to the new layout, prefab overrides follow, and the entries get their stable IDs and snapshots. |
+| [Newtonsoft.Json Converter](Samples~/NewtonsoftJson/README.md) | StableRef fields read and write the same JSON as bare `T` / `List<T>` fields — for remote configs, saves and server payloads. Requires Newtonsoft.Json. |
+| [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.md) | Switching a project from `[SerializeReference]` fields to StableRef with one button — both the code and the saved data. |
 
 ---
 
 ## Editor tools
 
-All tools are available under **Tools → StableRef** in the Unity menu bar.
+All tools are available under **Tools → StableRef**. They scan prefabs and ScriptableObjects under `Assets/` (including sub-assets) and the scenes that are currently open.
 
-**What the tools scan:** prefabs and ScriptableObject assets under `Assets/` — including ScriptableObjects stored as sub-assets inside another asset file (graph nodes, Timeline clips, `StateMachineBehaviour`s), which are listed under their file in the *Scriptable Objects* group as `Name (Type)` — and the scenes that are already open. Packages and closed scenes are not scanned. With text serialization (*Force Text*, Unity's default) files are first checked as text, in parallel, and only those that hold StableRef data — or instantiate a prefab that does (variants, nested prefabs) — are loaded; binary files are always loaded.
+Find Usages and Fix Missing Types show results in a tree with search: click a row to ping its object, double-click or use the arrow keys to expand, `Alt`+click to expand everything under a row.
 
-**Result trees.** Find Usages and Fix Missing Types show their results in a tree that draws only the visible rows, so tens of thousands of results scroll smoothly. After a scan only the groups (*Prefabs*, *Active Scenes*, *Scriptable Objects*) are expanded. Click a row to ping its object, click the arrow or double-click to expand, `Alt`+click to expand or collapse everything under it. The keyboard works as in the type selector, also from the search field: `↑` `↓` `Home` `End` `PageUp` `PageDown` move, `→` expands / jumps to the next node with children, `←` collapses / goes to the parent, `Enter` expands or collapses a node with children and pings any other row. The search runs once typing pauses for a moment. The search field matches asset, object, field and type names, and for a value also the name of the script that declares its type, so a script name finds every type of that file; a matching row is shown with everything under it, and every row on the way to a match is expanded while the search is active.
-
-**Find Usages** (`Tools/StableRef/Find Usages`) — scans prefabs, active scenes, and scriptable objects to show every place a selected type is used. Also accessible via right-click on a script asset: `Assets/Find StableRef Usages` — it searches by the script's name, so every type declared in the file is found, including several classes per file. Clicking a value (`SR: Type`) pings the script that declares the type, double-clicking opens it.
+**Find Usages** — every place a selected type is used. Also available from a script's context menu: `Assets/Find StableRef Usages`.
 
 <p align="center">
   <img src="Documentation~/find-usages.gif" alt="Find Usages window" width="640">
 </p>
 
-**Fix Missing Types** (`Tools/StableRef/Fix Missing Types`) — scans the project for StableRef fields that contain an ID that no longer maps to any known type. Useful after a refactor to find broken references before they become silent data loss.
+**Fix Missing Types** — finds StableRef fields whose type no longer exists, so you can fix broken references after a refactor before they turn into data loss.
 
 <p align="center">
   <img src="Documentation~/fix-missing.gif" alt="Fix Missing Types window" width="560">
 </p>
 
-**Resync All** (`Tools/StableRef/Resync All`) — brings the stable ID and snapshot of every StableRef entry in ScriptableObjects and prefabs under `Assets/` and in the open scenes in line with its current value. The inspector does this while you edit; run Resync All after values were written by code — importers, generators, `field.Value = ...` in editor scripts — so a later rename of their classes can be recovered (an entry without an ID can't be, and one with the ID of a previous value would be recovered as the wrong type). Values are never changed and missing entries are left to Fix Missing Types. Changed assets are saved; changed scenes are marked dirty. An asset whose entries are already in sync in memory but not saved yet (synced by the inspector or by an editor script that didn't save) is saved too, so the file always ends up matching. Prefabs Unity refuses to save (one with a missing script) are listed in the console and not counted as updated. In prefab instances and variants only overridden entries are touched, so no overrides are created for metadata. The console lists value types that still have no stable ID. From code: `StableRefResync.ResyncObject(target)` / `StableRefEntry.Refresh(entry)`, or `StableRefResync.ResyncAssets(paths)` for a known set of assets (resynced and saved like Resync All, without scanning the project).
+**Resync All** — updates the stored ID and recovery data of every entry to match its current value. The inspector does this while you edit; run Resync All after values were written by code. Values themselves are never changed. From code: `StableRefResync.ResyncObject(target)` or `StableRefResync.ResyncAssets(paths)`.
 
-**Metadata Size Report** (`Tools/StableRef/Metadata Size Report`) — estimates the size of the StableRef metadata: what reaches player builds (the stable IDs — serialized bytes and managed memory once loaded) and what stays in the assets only (display names and snapshots), per entry and for the largest assets. It is computed from Unity's binary format (a string is 4 bytes of length plus UTF-8 aligned to 4, an object reference 12 bytes; on the managed heap a string is about 22 + 2 bytes per character), not measured from a build, and is printed to the console.
+**Metadata Size Report** — estimates how much space the StableRef metadata takes, in builds and in assets.
 
-**Metadata in builds.** Only the stable ID (`TypeId`) and the value go into player builds. The display name and the snapshot (`TypeDisplayName`, `ObjectRefs`, `ObjectRefPaths`, `ValuesData`) are editor-only fields: they are kept in your assets for recovery, copy/paste and these tools, and Unity leaves them out of builds, so they cost no build size or memory. Code that reads or writes them must be inside `#if UNITY_EDITOR`. Rebuild AssetBundles built with `DisableWriteTypeTree` together with the player, as with any change of serialized fields.
+**Metadata in builds.** Only the type ID and the value go into player builds. The display name and the recovery snapshot are editor-only and cost nothing in builds.
 
-**What recovery restores.** Each entry keeps a snapshot of its value next to the managed reference. After a rename or re-creation, recovery restores nested structs, arrays and lists, hidden serialized fields, `UnityEngine.Object` references anywhere in the value, and StableRef entries nested inside it (fixed in passes). Not captured — these come back as the new instance's defaults: `AnimationCurve`, `Gradient`, `Hash128`, `ExposedReference`, fixed buffers.
+**What recovery restores.** Each entry keeps a snapshot of its value. After a class rename, recovery restores its fields, nested objects, lists and `UnityEngine.Object` references. `AnimationCurve` and `Gradient` are not captured.
 
-Entries whose ID cannot be resolved are **skipped and kept** by Fix All (restore the type or its `[RefTypeId]` and re-run); discard one deliberately by picking None (or another type) in its selector, **Set to None** in its right-click menu, or deleting the list element. A missing entry never locks its field or its `StableRefList`; replacing it asks for confirmation first, since a class can also be missing just for a moment (compile errors, switching branches).
+Entries that can't be resolved are **skipped and kept** — restore the type and run the fix again. To discard one, pick None in its selector or use **Set to None** from its context menu; replacing a missing entry always asks for confirmation.
 
 ---
 
@@ -292,9 +265,9 @@ Entries whose ID cannot be resolved are **skipped and kept** by Fix All (restore
 
 For projects with their own IMGUI inspector framework:
 
-- **`IStableRefChildrenDrawer`** — assign it to `StableRefDrawing.ChildrenDrawer` (from an `[InitializeOnLoad]` type) to draw the fields inside StableRef values through your framework, so its attributes work there too. When their height changes because of your drawer's own state, call `StableRefDrawing.InvalidateLayout()`.
-- **`IRefTypeMetadataProvider`** — names, categories, tooltips and order of types in the selector from your own attributes; found automatically.
-- **`StableRefEditorUtility.GetValueProperty(property)`** — the managed reference of both a `StableRef<T>` and a plain `[SerializeReference]` field, for drawers that read `managedReferenceValue`.
+- **`IStableRefChildrenDrawer`** — assign to `StableRefDrawing.ChildrenDrawer` to draw the fields inside StableRef values through your framework.
+- **`IRefTypeMetadataProvider`** — names, categories, tooltips and order of types in the selector from your own attributes.
+- **`StableRefEditorUtility.GetValueProperty(property)`** — the managed reference of both a `StableRef<T>` and a plain `[SerializeReference]` field.
 
 Details are in the XML docs of these types.
 
@@ -302,13 +275,13 @@ Details are in the XML docs of these types.
 
 ## Copying and pasting
 
-Unity's **Copy Component** / **Paste Component Values** can corrupt `[SerializeReference]` data when copying between documents (e.g. scene → prefab), leaving a persistent `Could not update a managed instance value at property path 'managedReferences[...]'` error. Move StableRef values with the right-click menu instead — it builds a new managed reference in the destination rather than copying serialized bytes:
+Unity's **Copy Component** / **Paste Component Values** can corrupt `[SerializeReference]` data when copying between a scene and a prefab. Use the right-click menu instead:
 
 - **A field** — `StableRef/Copy`, `StableRef/Paste`.
-- **A list element** (in `StableRefList<T>` anywhere on its row; also in `List<StableRef<T>>`, `StableRef<T>[]` and `[RefSelector]` lists) — `Paste as New Element`, `Duplicate Array Element` (a deep copy; Unity's own Duplicate shares the reference), `Delete Array Element`.
+- **A list element** — `Paste as New Element`, `Duplicate Array Element` (a deep copy), `Delete Array Element`.
 - **A list header** — `StableRef/Copy` for all entries, `StableRef/Paste/Replace` or `StableRef/Paste/Append`.
 
-> **Warning:** `[SerializeReference]` fields (StableRef included) don't always survive built-in Unity operations — Duplicate, drag & drop, prefab apply/revert, merges. Commit before bulk changes and check the result.
+> **Warning:** `[SerializeReference]` fields (StableRef included) don't always survive built-in Unity operations — Duplicate, drag & drop, prefab apply/revert, merges. Commit before bulk changes.
 
 ---
 
