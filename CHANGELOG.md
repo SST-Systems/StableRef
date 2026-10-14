@@ -1,5 +1,12 @@
 # StableRef
 
+## 4.2.5 - 14.10.2026
+
+### Changed
+
+- **The READMEs are shorter.** The package README and both samples' READMEs kept every section but lost most implementation detail (scan internals, keyboard maps, size formulas, the full catalogue of migration rewrites) that users had to read through to find how to use a feature. That detail lives in the XML docs and the code.
+- **The Newtonsoft.Json Converter sample follows the usual package layout.** The converter's assembly moved to `Runtime/`, its tests to `Tests/Editor/`, as in the SerializeReference Migration sample. File GUIDs are unchanged; a re-import puts the sample in a new version folder as usual.
+
 ## 4.2.4 - 13.10.2026
 
 ### Fixed
