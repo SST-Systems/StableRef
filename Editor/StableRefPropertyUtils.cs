@@ -347,7 +347,9 @@ namespace SST.StableRef
             return arr;
         }
 
-        private static TypeEntry CreateEntry(Type t)
+        internal static void ClearEntryCache() => _typeCache.Clear();
+
+        internal static TypeEntry CreateEntry(Type t)
         {
             var meta = StableRefTypeMetadata.Get(t);
             string fullPath = string.IsNullOrEmpty(meta.Category) ? meta.DisplayName : $"{meta.Category}/{meta.DisplayName}";

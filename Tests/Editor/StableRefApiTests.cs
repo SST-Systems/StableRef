@@ -297,6 +297,23 @@ namespace SST.StableRef.Tests
         }
 
         [Test]
+        public void NamespaceCategories_ListTypesWithoutCategoryUnderTheirNamespace()
+        {
+            bool saved = StableRefSelectorWindow.NamespaceCategories;
+            try
+            {
+                StableRefSelectorWindow.NamespaceCategories = true;
+                Assert.AreEqual("SST/StableRef/Tests", StableRefTypeMetadata.Get(typeof(AlphaThing)).Category);
+                Assert.AreEqual("Meta/Sub", StableRefTypeMetadata.Get(typeof(MetaThing)).Category, "a category wins");
+
+                StableRefSelectorWindow.NamespaceCategories = false;
+                Assert.AreEqual("", StableRefTypeMetadata.Get(typeof(AlphaThing)).Category);
+                Assert.AreEqual("Meta/Sub", StableRefTypeMetadata.Get(typeof(MetaThing)).Category);
+            }
+            finally { StableRefSelectorWindow.NamespaceCategories = saved; }
+        }
+
+        [Test]
         public void MetadataProvider_OverridesSelectorPresentation()
         {
             var meta = StableRefTypeMetadata.Get(typeof(MetaThing));
@@ -307,7 +324,6 @@ namespace SST.StableRef.Tests
 
             var fallback = StableRefTypeMetadata.Get(typeof(AlphaThing));
             Assert.AreEqual("AlphaThing", fallback.DisplayName);
-            Assert.AreEqual("", fallback.Category);
 
             var holder = NewHolder();
             var valueProp = new SerializedObject(holder).FindProperty("Ref.Value");

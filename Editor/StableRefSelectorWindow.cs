@@ -17,6 +17,7 @@ namespace SST.StableRef
         private const string PrefH = "StableRefSelectorWindow_H";
         private const string PrefShowCategory = "StableRefSelectorWindow_ShowCategory";
         private const string PrefDeepSearch = "StableRefSelectorWindow_DeepSearch";
+        private const string PrefNamespaceCategories = "StableRefSelectorWindow_NamespaceCategories";
 
         private const float DefW = 280f;
         private const float DefH = 350f;
@@ -51,6 +52,23 @@ namespace SST.StableRef
         {
             get => EditorPrefs.GetBool(PrefDeepSearch, false);
             set => EditorPrefs.SetBool(PrefDeepSearch, value);
+        }
+
+        /// <summary>
+        /// Namespace categories: a type that gets no category from <see cref="RefCategoryAttribute"/> or an
+        /// <see cref="IRefTypeMetadataProvider"/> is listed under its namespace (<c>A.B</c> → <c>A/B</c>). On by default; the attribute always wins.
+        /// </summary>
+        public static bool NamespaceCategories
+        {
+            get => EditorPrefs.GetBool(PrefNamespaceCategories, true);
+            set
+            {
+                if (value == NamespaceCategories) return;
+                EditorPrefs.SetBool(PrefNamespaceCategories, value);
+                StableRefTypeMetadata.ClearCache();
+                StableRefPropertyUtils.ClearEntryCache();
+                StableRefSelectorField.ClearLabelCache();
+            }
         }
 
         /// <summary>A type whose declaration index was still being built when the rows were last filtered.</summary>
@@ -655,6 +673,17 @@ namespace SST.StableRef
         }
 
         /// <summary>Called when <see cref="DeepSearch"/> is switched in the settings popup.</summary>
+        internal void OnCategoriesChanged()
+        {
+            if (_entries == null) return;
+            var prev = SelectedRow;
+            _entries = Array.ConvertAll(_entries, e => StableRefPropertyUtils.CreateEntry(e.Type));
+            _collapsed.Clear();
+            RebuildRows();
+            if (!RestoreSelection(prev)) SelectCurrentOrNone();
+            Repaint();
+        }
+
         internal void OnDeepSearchChanged()
         {
             WarmUpDeepSearch();

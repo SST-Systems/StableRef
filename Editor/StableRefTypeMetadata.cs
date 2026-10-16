@@ -9,8 +9,9 @@ namespace SST.StableRef
 {
     /// <summary>
     /// Resolved selector metadata per type: the <see cref="IRefTypeMetadataProvider"/> implementations in
-    /// <see cref="IRefTypeMetadataProvider.Order"/>, then the built-in display name and <see cref="RefCategoryAttribute"/>.
-    /// Cached per type for the domain's lifetime.
+    /// <see cref="IRefTypeMetadataProvider.Order"/>, then the built-in display name and <see cref="RefCategoryAttribute"/>,
+    /// then the namespace when <see cref="StableRefSelectorWindow.NamespaceCategories"/> is on.
+    /// Cached per type until that setting changes.
     /// </summary>
     internal static class StableRefTypeMetadata
     {
@@ -44,9 +45,19 @@ namespace SST.StableRef
 
             if (string.IsNullOrEmpty(result.DisplayName)) result.DisplayName = StableRefGenericUtils.DisplayName(type);
             if (string.IsNullOrEmpty(result.Category)) result.Category = type.GetCustomAttribute<RefCategoryAttribute>()?.Category ?? "";
+            if (string.IsNullOrEmpty(result.Category) && StableRefSelectorWindow.NamespaceCategories)
+                result.Category = NamespaceCategory(type);
             if (result.Category.Length > 0) result.Category = result.Category.Trim('/');
 
             return _cache[type] = result;
+        }
+
+        internal static void ClearCache() => _cache.Clear();
+
+        private static string NamespaceCategory(Type type)
+        {
+            while (type.IsNested) type = type.DeclaringType;
+            return string.IsNullOrEmpty(type.Namespace) ? "" : type.Namespace.Replace('.', '/');
         }
 
         private static List<IRefTypeMetadataProvider> Providers => _providers ??= CreateProviders();

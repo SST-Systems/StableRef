@@ -34,6 +34,17 @@ namespace SST.StableRef
             public GlobalObjectId ObjectId;
             public string AssetPath;
             public bool IsSceneObject;
+            /// <summary>A scene object whose references Unity lost in memory — the scene is read from disk again.</summary>
+            public bool LostInMemory;
+            /// <summary>Records of missing classes without data that Fix All clears (see <see cref="StableRefFileRepair.EmptyRecord"/>).</summary>
+            public List<long> EmptyRecordRids;
+        }
+
+        /// <summary>A scanned file with records Unity can't read back; it is repaired before anything is fixed.</summary>
+        private sealed class FileIssue
+        {
+            public List<StableRefYamlRecords.Unreadable> Records;
+            public bool IsScene;
         }
 
         private List<StableRefResultTree.Node> _roots;
@@ -51,6 +62,7 @@ namespace SST.StableRef
         {
             _roots = null;
             _scanEntries.Clear();
+            _fileIssues.Clear();
             _hasScanned = false;
             _showDomainReloadHint = false;
             _filter = "";
@@ -171,24 +183,48 @@ namespace SST.StableRef
             public List<string> GoNameChain;
             public bool SceneLoaded;
             public string SceneName;
+            public bool LostInMemory;
+            public List<long> EmptyRecordRids;
         }
 
         private readonly List<ScanEntry> _scanEntries = new();
         private readonly HashSet<GlobalObjectId> _scanSeen = new();
+        private readonly Dictionary<string, FileIssue> _fileIssues = new();
 
         internal void DoScan()
         {
             _scanEntries.Clear();
             _scanSeen.Clear();
+            _fileIssues.Clear();
             _hasScanned = true;
             _showDomainReloadHint = false;
+            int reloaded = 0;
 
             StableRefEditorUtility.ScanProject("Scanning assets…", source =>
             {
+                // The text is parsed only when it may hold an unreadable record or an object has something missing.
+                StableRefYamlRecords.Document document = null;
+                StableRefYamlRecords.Document Document() => document ??= StableRefFileRepair.ReadDocument(source.Path);
+
+                if (source.HasRecordWithoutData)
+                {
+                    var unreadable = StableRefFileRepair.FindUnreadable(Document());
+                    if (unreadable.Count > 0)
+                    {
+                        // Every reference of the file's objects reads as lost until the file is repaired.
+                        _fileIssues[source.Path] = new FileIssue { Records = unreadable, IsScene = source.IsScene };
+                        return;
+                    }
+                }
+
                 foreach (var target in source.Targets)
-                    CollectMissing(target, source.Path, source.IsScene, sceneLoaded: source.IsScene,
-                        sceneName: source.IsScene ? source.Scene.name : null);
+                    CollectMissing(target, source.Path, source.IsScene, Document, ref reloaded,
+                        sceneLoaded: source.IsScene, sceneName: source.IsScene ? source.Scene.name : null);
             });
+
+            if (reloaded > 0)
+                Debug.Log($"[StableRef] Read {reloaded} asset{(reloaded != 1 ? "s" : "")} from disk again: Unity had " +
+                          "lost their references in memory after a domain reload (the files were intact).");
 
             BuildTree();
             EditorUtility.UnloadUnusedAssetsImmediate();
@@ -196,14 +232,31 @@ namespace SST.StableRef
         }
 
         private void CollectMissing(UnityEngine.Object target, string assetPath, bool isScene,
-            bool sceneLoaded = false, string sceneName = null)
+            Func<StableRefYamlRecords.Document> document, ref int reloaded, bool sceneLoaded = false, string sceneName = null)
         {
             if (target is not MonoBehaviour && target is not ScriptableObject) return;
-            if (!StableRefPropertyUtils.MayContainStableRef(target.GetType())
-                && !SerializationUtility.HasManagedReferencesWithMissingTypes(target)) return;
+            bool hasMissingData = SerializationUtility.HasManagedReferencesWithMissingTypes(target);
+            if (!StableRefPropertyUtils.MayContainStableRef(target.GetType()) && !hasMissingData) return;
 
-            var missingRefs = CollectMissingRefs(target);
+            var emptyRecords = hasMissingData
+                ? StableRefFileRepair.FindEmptyMissingRecords(target, document())
+                : new List<StableRefFileRepair.EmptyRecord>();
+            var missingRefs = CollectMissingRefs(target, emptyRecords);
             if (missingRefs.Count == 0) return;
+
+            bool lost = !hasMissingData && StableRefFileRepair.IsLostInMemory(target, document());
+            if (lost && !isScene)
+            {
+                var fresh = StableRefFileRepair.ReloadAsset(target);
+                lost = false;
+                if (fresh != null)
+                {
+                    reloaded++;
+                    target = fresh;
+                    missingRefs = CollectMissingRefs(target);
+                    if (missingRefs.Count == 0) return;
+                }
+            }
 
             var objectId = GlobalObjectId.GetGlobalObjectIdSlow(target);
             if (!_scanSeen.Add(objectId)) return;
@@ -228,37 +281,71 @@ namespace SST.StableRef
                 Label = StableRefEditorUtility.ScanTargetLabel(target),
                 GoNameChain = goChain,
                 SceneLoaded = sceneLoaded,
-                SceneName = sceneName
+                SceneName = sceneName,
+                LostInMemory = lost,
+                EmptyRecordRids = emptyRecords.Count > 0 ? emptyRecords.Select(r => r.Rid).ToList() : null
             });
         }
 
-        private static List<MissingRefInfo> CollectMissingRefs(UnityEngine.Object target)
+        /// <summary>
+        /// The missing entries of <paramref name="target"/>, plus an entry without a stable id that points at one of
+        /// <paramref name="emptyRecords"/> (it isn't missing otherwise; Fix All sets it to None).
+        /// </summary>
+        private static List<MissingRefInfo> CollectMissingRefs(UnityEngine.Object target,
+            List<StableRefFileRepair.EmptyRecord> emptyRecords = null)
         {
             var result = new List<MissingRefInfo>();
             var so = new SerializedObject(target);
             so.Update();
+
+            // YAML field path → class name of the empty record the entry there points at.
+            Dictionary<string, string> emptyByPath = null;
+            if (emptyRecords != null)
+                foreach (var record in emptyRecords)
+                foreach (var field in record.Fields)
+                    if (field.IsEntry)
+                        (emptyByPath ??= new Dictionary<string, string>())[field.Path] = record.ClassName;
+
             var iter = so.GetIterator();
             bool enter = true;
-
             while (iter.Next(enter))
             {
-                if (TryGetMissingWrapper(so, iter, out var wrapperProp))
+                if (TryGetEmptyEntry(so, iter, emptyByPath != null, out var wrapperProp, out string typeId))
                 {
-                    var typeIdProp = wrapperProp.FindPropertyRelative(StableRefEntry.TypeIdFieldName);
-                    var dispProp = wrapperProp.FindPropertyRelative(StableRefEntry.TypeDisplayNameFieldName);
-                    var recoveredType = StableRefTypeRegistry.GetType(typeIdProp.stringValue);
-
-                    result.Add(new MissingRefInfo
+                    string emptyClass = null;
+                    if (emptyByPath != null)
                     {
-                        GroupPath = GetFieldGroupPath(so, wrapperProp.propertyPath),
-                        Label = StableRefEntry.BuildMissingLabelText(dispProp?.stringValue, recoveredType)
-                    });
+                        string yamlPath = StableRefFileRepair.YamlFieldPath(so, wrapperProp.propertyPath);
+                        if (emptyByPath.TryGetValue(yamlPath, out emptyClass)) emptyByPath.Remove(yamlPath);
+                    }
+
+                    if (!string.IsNullOrEmpty(typeId) || emptyClass != null)
+                    {
+                        var dispProp = wrapperProp.FindPropertyRelative(StableRefEntry.TypeDisplayNameFieldName);
+                        string lost = string.IsNullOrEmpty(dispProp?.stringValue) ? emptyClass : dispProp.stringValue;
+                        result.Add(new MissingRefInfo
+                        {
+                            GroupPath = GetFieldGroupPath(so, wrapperProp.propertyPath),
+                            Label = emptyClass != null
+                                ? BrokenLabel(lost)
+                                : StableRefEntry.BuildMissingLabelText(lost, StableRefTypeRegistry.GetType(typeId))
+                        });
+                    }
                 }
 
                 enter = iter.propertyType == SerializedPropertyType.ManagedReference
                     ? StableRefPropertyUtils.HasManagedValue(iter)
                     : StableRefPropertyUtils.MayHoldEntries(iter);
             }
+
+            // Fields whose path couldn't be matched to a property are still listed, under their YAML path.
+            if (emptyByPath != null)
+                foreach (var pair in emptyByPath)
+                    result.Add(new MissingRefInfo
+                    {
+                        GroupPath = YamlGroupPath(pair.Key),
+                        Label = BrokenLabel(pair.Value)
+                    });
 
             return result;
         }
@@ -307,19 +394,21 @@ namespace SST.StableRef
             var sceneGroup  = new Node { Kind = NodeKind.Group, Label = "Active Scenes", Expanded = true };
             var soGroup     = new Node { Kind = NodeKind.Group, Label = "Scriptable Objects", Expanded = true };
 
-            foreach (var assetGroup in _scanEntries.GroupBy(e => e.AssetPath).OrderBy(g => g.Key))
+            var byPath = _scanEntries.GroupBy(e => e.AssetPath).ToDictionary(g => g.Key, g => g.ToList());
+            foreach (var assetPath in byPath.Keys.Concat(_fileIssues.Keys).Distinct().OrderBy(p => p))
             {
-                var assetPath = assetGroup.Key;
-                var firstEntry = assetGroup.First();
-                bool isScene = firstEntry.IsSceneObject;
+                byPath.TryGetValue(assetPath, out var assetEntries);
+                _fileIssues.TryGetValue(assetPath, out var issue);
+                var firstEntry = assetEntries?[0] ?? default;
+                bool isScene = issue?.IsScene ?? firstEntry.IsSceneObject;
 
                 Node targetGroup;
                 if (isScene)
                     targetGroup = sceneGroup;
-                else if (firstEntry.GoNameChain == null)
-                    targetGroup = soGroup;
-                else
+                else if (assetPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
                     targetGroup = prefabGroup;
+                else
+                    targetGroup = soGroup;
 
                 var assetObject = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(assetPath);
 
@@ -333,10 +422,14 @@ namespace SST.StableRef
                         ? StableRefEditorUtility.Icon("SceneAsset Icon").image
                         : AssetDatabase.GetCachedIcon(assetPath),
                     PingTarget = assetObject,
-                    AssetPath = assetPath
+                    AssetPath = assetPath,
+                    IsSceneObject = isScene
                 };
 
-                foreach (var entry in assetGroup)
+                if (issue != null)
+                    AddFieldNodes(assetNode, UnreadableRefs(issue.Records), assetObject);
+
+                foreach (var entry in assetEntries ?? Enumerable.Empty<ScanEntry>())
                 {
                     if (entry.GoNameChain == null)
                     {
@@ -350,7 +443,7 @@ namespace SST.StableRef
                             AssetPath = assetPath,
                             IsSceneObject = false
                         };
-                        AddMissingRefNodes(compNode, entry.MissingRefs, entry.Target);
+                        AddMissingRefNodes(compNode, entry, entry.Target);
                         assetNode.Children.Add(compNode);
                     }
                     else
@@ -374,14 +467,65 @@ namespace SST.StableRef
             _tree.SetRoots(_roots);
         }
 
-        private static void AddMissingRefNodes(Node compNode, List<MissingRefInfo> missingRefs, UnityEngine.Object pingTarget)
+        /// <summary>The fields pointing at records Unity can't read, each in the branch of its field.</summary>
+        private static IEnumerable<MissingRefInfo> UnreadableRefs(List<StableRefYamlRecords.Unreadable> records)
+        {
+            foreach (var record in records)
+            {
+                if (record.Fields.Count == 0)
+                    yield return new MissingRefInfo { Label = BrokenLabel(record.ClassName) };
+
+                foreach (var field in record.Fields)
+                    yield return new MissingRefInfo { GroupPath = YamlGroupPath(field.Path), Label = BrokenLabel(record.ClassName) };
+            }
+        }
+
+        private static string BrokenLabel(string className) => StableRefFileRepair.BrokenLabelText(className);
+
+        /// <summary>
+        /// A YAML field path (<c>Reference.Condition</c>, <c>List[2]</c>) as a field group like
+        /// <see cref="GetFieldGroupPath"/> builds — display names, list indices left out.
+        /// </summary>
+        private static GroupSeg[] YamlGroupPath(string yamlPath)
+        {
+            if (string.IsNullOrEmpty(yamlPath)) return Array.Empty<GroupSeg>();
+            var names = yamlPath.Split('.').Select(s =>
+            {
+                int bracket = s.IndexOf('[');
+                return ObjectNames.NicifyVariableName(bracket >= 0 ? s.Substring(0, bracket) : s);
+            });
+            return new[] { new GroupSeg { Label = string.Join("/", names) } };
+        }
+
+        private static void AddMissingRefNodes(Node compNode, ScanEntry entry, UnityEngine.Object pingTarget)
+        {
+            if (entry.LostInMemory)
+            {
+                compNode.LostInMemory = true;
+                compNode.Children.Add(new Node
+                {
+                    Kind = NodeKind.Item,
+                    Label = "References lost in memory after a domain reload (the scene file is intact) — " +
+                            "Fix All reads the scene from disk again",
+                    Icon = StableRefEditorUtility.Icon("console.warnicon.sml").image,
+                    PingTarget = pingTarget
+                });
+                return;
+            }
+
+            compNode.EmptyRecordRids = entry.EmptyRecordRids;
+            AddFieldNodes(compNode, entry.MissingRefs, pingTarget);
+        }
+
+        /// <summary>The missing refs under <paramref name="root"/>, each in the branch of its field.</summary>
+        private static void AddFieldNodes(Node root, IEnumerable<MissingRefInfo> refs, UnityEngine.Object pingTarget)
         {
             var scriptIcon = ScriptIcon;
             var groupNodes = new Dictionary<string, Node>();
 
-            foreach (var r in missingRefs)
+            foreach (var r in refs)
             {
-                Node parent = compNode;
+                Node parent = root;
                 string key = "";
 
                 if (r.GroupPath != null)
@@ -454,7 +598,7 @@ namespace SST.StableRef
                 AssetPath = assetPath,
                 IsSceneObject = entry.IsSceneObject
             };
-            AddMissingRefNodes(compNode, entry.MissingRefs, comp);
+            AddMissingRefNodes(compNode, entry, comp);
             current.Children.Add(compNode);
         }
 
@@ -493,7 +637,7 @@ namespace SST.StableRef
                 AssetPath = assetPath,
                 IsSceneObject = true
             };
-            AddMissingRefNodes(compNode, entry.MissingRefs, sceneAsset);
+            AddMissingRefNodes(compNode, entry, sceneAsset);
             current.Children.Add(compNode);
         }
 
@@ -507,12 +651,66 @@ namespace SST.StableRef
 
             int fixedCount = 0;
             int unresolvedCount = 0;
+            int repairedFiles = 0;
             var fixedPaths = new HashSet<string>();
-            var fixedAssets = new List<(UnityEngine.Object Asset, string Path, int Count)>();
+            var fixedAssets = new List<(UnityEngine.Object Asset, string Path, int Count, int Cleared)>();
+            var notRepaired = new List<string>();
 
+            var reloadScenes = _fileIssues.Where(p => p.Value.IsScene).Select(p => p.Key)
+                .Concat(entries.Where(n => n.IsSceneObject && n.LostInMemory).Select(n => n.AssetPath))
+                .Where(p => !string.IsNullOrEmpty(p))
+                .Distinct()
+                .ToList();
+            bool reload = reloadScenes.Count > 0 && StableRefFileRepair.ConfirmSceneReload(reloadScenes);
+
+            int clearedCount = 0;
+
+            int FixAndClear(UnityEngine.Object target, Node node, out int cleared)
+            {
+                int fixedHere = FixTarget(target, out int unresolved);
+                unresolvedCount += unresolved;
+                cleared = node != null ? StableRefFileRepair.ClearEmptyRecords(target, node.EmptyRecordRids) : 0;
+                clearedCount += cleared;
+                fixedCount += fixedHere;
+                return fixedHere;
+            }
+
+            void FixAsset(UnityEngine.Object target, string path, Node node)
+            {
+                int fixedHere = FixAndClear(target, node, out int cleared);
+                if (fixedHere + cleared == 0) return;
+                fixedPaths.Add(path);
+                fixedAssets.Add((target, path, fixedHere, cleared));
+            }
+
+            var repairPaths = _fileIssues.Where(p => !p.Value.IsScene).Select(p => p.Key).ToList();
             var assetEntries = entries.Where(n => !n.IsSceneObject).ToList();
             try
             {
+                for (int i = 0; i < repairPaths.Count; i++)
+                {
+                    var path = repairPaths[i];
+                    if (EditorUtility.DisplayCancelableProgressBar("Repairing files…", path, (float)i / repairPaths.Count))
+                        break;
+
+                    var result = StableRefFileRepair.RepairAsset(path);
+                    if (result == StableRefFileRepair.RepairResult.Unsaved)
+                    {
+                        notRepaired.Add(path + " (has unsaved changes — save or revert it first)");
+                        continue;
+                    }
+                    if (result == StableRefFileRepair.RepairResult.Failed)
+                    {
+                        notRepaired.Add(path + " (couldn't be read or written)");
+                        continue;
+                    }
+
+                    if (result == StableRefFileRepair.RepairResult.Repaired) repairedFiles++;
+                    foreach (var target in StableRefEditorUtility.LoadScanTargets(path))
+                        if (target is MonoBehaviour || target is ScriptableObject)
+                            FixAsset(target, path, null);
+                }
+
                 for (int i = 0; i < assetEntries.Count; i++)
                 {
                     var node = assetEntries[i];
@@ -521,29 +719,61 @@ namespace SST.StableRef
                         break;
 
                     var target = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(node.ObjectId);
-                    if (target == null) continue;
-
-                    int fixedHere = FixTarget(target, out int unresolved);
-                    fixedCount += fixedHere;
-                    unresolvedCount += unresolved;
-                    if (fixedHere > 0)
-                    {
-                        fixedPaths.Add(node.AssetPath);
-                        fixedAssets.Add((target, node.AssetPath, fixedHere));
-                    }
+                    if (target != null) FixAsset(target, node.AssetPath, node);
                 }
             }
             finally { EditorUtility.ClearProgressBar(); }
 
             var unsavedAssets = new List<string>();
-            foreach (var (asset, path, count) in fixedAssets)
+            var unsafeAssets = new List<string>();
+            foreach (var (asset, path, count, cleared) in fixedAssets)
             {
+                if (StableRefFileRepair.HoldsEmptyMissingRecord(asset))
+                {
+                    fixedCount -= count;
+                    clearedCount -= cleared;
+                    if (!unsafeAssets.Contains(path)) unsafeAssets.Add(path);
+                    continue;
+                }
                 if (StableRefEditorUtility.TrySaveAsset(asset)) continue;
                 fixedCount -= count;
+                clearedCount -= cleared;
                 if (!unsavedAssets.Contains(path)) unsavedAssets.Add(path);
             }
 
-            var byScene = entries.Where(n => n.IsSceneObject).GroupBy(n => n.AssetPath).ToList();
+            if (reload)
+            {
+                StableRefFileRepair.ReloadScenes(reloadScenes, path =>
+                {
+                    if (_fileIssues.TryGetValue(path, out var issue) && issue.IsScene)
+                        StableRefFileRepair.RepairClosedScene(path);
+                });
+
+                foreach (var scenePath in reloadScenes)
+                {
+                    var scene = SceneManager.GetSceneByPath(scenePath);
+                    if (!scene.IsValid() || !scene.isLoaded) continue;
+
+                    int fixedInScene = 0;
+                    foreach (var root in scene.GetRootGameObjects())
+                    foreach (var component in root.GetComponentsInChildren<MonoBehaviour>(true))
+                    {
+                        if (component == null || !StableRefPropertyUtils.MayContainStableRef(component.GetType())) continue;
+                        fixedInScene += FixTarget(component, out int unresolved);
+                        unresolvedCount += unresolved;
+                    }
+
+                    if (fixedInScene > 0)
+                    {
+                        fixedCount += fixedInScene;
+                        EditorSceneManager.MarkSceneDirty(scene);
+                        fixedPaths.Add(scenePath);
+                    }
+                }
+            }
+
+            var byScene = entries.Where(n => n.IsSceneObject && !reloadScenes.Contains(n.AssetPath))
+                .GroupBy(n => n.AssetPath).ToList();
             int skippedScenes = 0;
             try
             {
@@ -562,18 +792,16 @@ namespace SST.StableRef
                         continue;
                     }
 
-                    int fixedInScene = 0;
+                    int changedInScene = 0;
                     foreach (var node in sceneGroup)
                     {
                         var target = GlobalObjectId.GlobalObjectIdentifierToObjectSlow(node.ObjectId);
                         if (target == null) continue;
-                        fixedInScene += FixTarget(target, out int unresolved);
-                        unresolvedCount += unresolved;
+                        changedInScene += FixAndClear(target, node, out int cleared) + cleared;
                     }
 
-                    if (fixedInScene > 0)
+                    if (changedInScene > 0)
                     {
-                        fixedCount += fixedInScene;
                         EditorSceneManager.MarkSceneDirty(scene);
                         fixedPaths.Add(scenePath);
                     }
@@ -584,8 +812,16 @@ namespace SST.StableRef
             if (fixedPaths.Count > 0)
                 AssetDatabase.Refresh();
 
-            Debug.Log($"[StableRef] Fixed {fixedCount} missing reference{(fixedCount != 1 ? "s" : "")}. " +
-                      "Fixed scenes are marked dirty — save them to keep the changes.");
+            Debug.Log($"[StableRef] Fixed {fixedCount} missing reference{(fixedCount != 1 ? "s" : "")}" +
+                      (repairedFiles > 0 ? $", repaired {repairedFiles} unreadable file{(repairedFiles != 1 ? "s" : "")}" : "") +
+                      (reload ? $", read {reloadScenes.Count} scene{(reloadScenes.Count != 1 ? "s" : "")} from disk again" : "") +
+                      (clearedCount > 0 ? $", set {clearedCount} missing reference{(clearedCount != 1 ? "s" : "")} without data to None" : "") +                      ". Fixed scenes are marked dirty — save them to keep the changes.");
+            if (notRepaired.Count > 0)
+            {
+                Debug.LogWarning(
+                    "[StableRef] These files have records Unity can't read and were left as they are:\n" +
+                    string.Join("\n", notRepaired));
+            }
 
             if (unsavedAssets.Count > 0)
             {
@@ -594,12 +830,29 @@ namespace SST.StableRef
                     "script can't be saved; fix the asset and run Fix All again:\n" + string.Join("\n", unsavedAssets));
             }
 
+            if (unsafeAssets.Count > 0)
+            {
+                Debug.LogWarning(
+                    "[StableRef] These assets were fixed in memory but not saved: they still hold records of missing " +
+                    "classes without data (of plain [SerializeReference] fields), and saving them would make their files " +
+                    "unreadable — bring the classes back or set those fields to None, then save:\n" +
+                    string.Join("\n", unsafeAssets));
+            }
+
             if (unresolvedCount > 0)
             {
                 Debug.LogWarning(
                     $"[StableRef] Skipped {unresolvedCount} entr{(unresolvedCount != 1 ? "ies" : "y")} whose stable id " +
                     "no longer resolves to a type. Their recovery data was preserved — restore the type (or its " +
                     "[RefTypeId]) and re-run Fix All, or pick None / another type in the field's selector (or delete the element) to discard.");
+            }
+
+            if (reloadScenes.Count > 0 && !reload)
+            {
+                Debug.LogWarning(
+                    "[StableRef] These scenes were not read from disk again, so they were left as they are — don't save " +
+                    "them (that would write the lost state); reopen them or run Fix All again:\n" +
+                    string.Join("\n", reloadScenes));
             }
 
             if (skippedScenes > 0)
@@ -704,8 +957,17 @@ namespace SST.StableRef
         }
 
         private static bool TryGetMissingWrapper(SerializedObject so, SerializedProperty valueIter, out SerializedProperty wrapper)
+            => TryGetEmptyEntry(so, valueIter, false, out wrapper, out _);
+
+        /// <summary>
+        /// The entry whose <c>Value</c> is <paramref name="valueIter"/>, when that value is null — only with a stable id
+        /// unless <paramref name="withoutId"/>.
+        /// </summary>
+        private static bool TryGetEmptyEntry(SerializedObject so, SerializedProperty valueIter, bool withoutId,
+            out SerializedProperty wrapper, out string typeId)
         {
             wrapper = null;
+            typeId = null;
             if (valueIter.propertyType != SerializedPropertyType.ManagedReference) return false;
             if (valueIter.name != StableRefEntry.ValueFieldName) return false;
             if (StableRefPropertyUtils.HasManagedValue(valueIter)) return false;
@@ -717,7 +979,9 @@ namespace SST.StableRef
             if (candidate == null) return false;
 
             var typeIdProp = candidate.FindPropertyRelative(StableRefEntry.TypeIdFieldName);
-            if (typeIdProp == null || string.IsNullOrEmpty(typeIdProp.stringValue)) return false;
+            if (typeIdProp == null) return false;
+            typeId = typeIdProp.stringValue;
+            if (!withoutId && string.IsNullOrEmpty(typeId)) return false;
             if (candidate.FindPropertyRelative(StableRefEntry.ValuesDataFieldName) == null) return false;
 
             wrapper = candidate;
