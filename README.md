@@ -259,6 +259,11 @@ Find Usages and Fix Missing Types show results in a tree with search: click a ro
 
 Entries that can't be resolved are **skipped and kept** — restore the type and run the fix again. To discard one, pick None in its selector or use **Set to None** from its context menu; replacing a missing entry always asks for confirmation.
 
+**When Unity loses references the file still holds**, the fix gets them back from the file instead of recreating them:
+
+- **A file Unity can't read.** When a class without serialized fields goes missing, Unity saves its reference in a form it can't load back, and the object loses *all* its references on every load. The fix removes that one reference from the file (the field becomes None; an entry with an ID is then recreated from its snapshot) and logs what was removed. Text-serialized files only. If the class was renamed, add `[MovedFrom]` to it before fixing. Before it happens, the scan and the inspector show such a field as *Broken*, and Fix All (or the field's warning button) sets it to None so the save is safe — the entry keeps its ID and is recreated once the class is back.
+- **References lost after a domain reload.** An object that holds a missing type can lose all its references in memory on the next domain reload, while its file is intact. Assets are read from disk again during the scan; open scenes are reloaded after you confirm — don't save such a scene before that.
+
 ---
 
 ## Inspector integration

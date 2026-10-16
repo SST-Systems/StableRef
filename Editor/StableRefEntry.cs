@@ -95,6 +95,8 @@ namespace SST.StableRef
                         SerializationUtility.ClearManagedReferenceWithMissingType(target, id);
             }
 
+            StableRefFileRepair.ReleaseEmptyRecords(target);
+
             if (SerializationUtility.HasManagedReferencesWithMissingTypes(target) && !StillNeedsMissingData(target))
                 SerializationUtility.ClearAllManagedReferencesWithMissingTypes(target);
         }

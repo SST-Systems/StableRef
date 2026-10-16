@@ -431,8 +431,18 @@ namespace SST.StableRef
             public bool IsScene;
             /// <summary>The scene; valid only when <see cref="IsScene"/>.</summary>
             public Scene Scene;
-            /// <summary>See <see cref="LoadScanTargets"/>; for a scene, every component in it.</summary>
+            /// <summary>
+            /// See <see cref="LoadScanTargets"/>; for a scene, every component in it. Empty when the file's objects
+            /// can't be loaded — e.g. a record Unity can't read (see <see cref="StableRefYamlRecords"/>) can make the
+            /// whole object fail to load; the file is still visited so its text can be checked.
+            /// </summary>
             public List<UnityEngine.Object> Targets;
+            /// <summary>
+            /// The file's text has a managed-reference record without <c>data:</c> — only then can it hold a record
+            /// Unity can't read back (see <see cref="StableRefYamlRecords"/>). Always true for a scene and for a file
+            /// that couldn't be checked as text.
+            /// </summary>
+            public bool HasRecordWithoutData;
         }
 
         /// <summary>
@@ -453,16 +463,15 @@ namespace SST.StableRef
             try
             {
                 EditorUtility.DisplayProgressBar(progressTitle, "Looking for StableRef data…", 0f);
-                var paths = FilterScanPaths(allPaths);
+                var files = FilterScanFiles(allPaths);
 
-                for (int i = 0; i < paths.Count; i++)
+                for (int i = 0; i < files.Count; i++)
                 {
-                    var path = paths[i];
-                    if (EditorUtility.DisplayCancelableProgressBar(progressTitle, path, (float)i / paths.Count))
+                    var (path, withoutData) = files[i];
+                    if (EditorUtility.DisplayCancelableProgressBar(progressTitle, path, (float)i / files.Count))
                         break;
 
-                    var targets = LoadScanTargets(path);
-                    if (targets.Count > 0) visit(new ScanSource { Path = path, Targets = targets });
+                    visit(new ScanSource { Path = path, Targets = LoadScanTargets(path), HasRecordWithoutData = withoutData });
                 }
 
                 for (int i = 0; i < SceneManager.sceneCount; i++)
@@ -473,7 +482,10 @@ namespace SST.StableRef
                     var targets = new List<UnityEngine.Object>();
                     foreach (var root in scene.GetRootGameObjects())
                         AddComponents(root, targets);
-                    visit(new ScanSource { Path = scene.path, IsScene = true, Scene = scene, Targets = targets });
+                    visit(new ScanSource
+                    {
+                        Path = scene.path, IsScene = true, Scene = scene, Targets = targets, HasRecordWithoutData = true
+                    });
                 }
             }
             finally { EditorUtility.ClearProgressBar(); }
@@ -512,6 +524,8 @@ namespace SST.StableRef
         private static readonly byte[] UnityYamlTag = Encoding.ASCII.GetBytes("tag:unity3d.com");
         private static readonly byte[] SourcePrefabKey = Encoding.ASCII.GetBytes("m_SourcePrefab: {");
         private static readonly byte[] GuidKey = Encoding.ASCII.GetBytes("guid: ");
+        private static readonly byte[] RecordTypeKey = Encoding.ASCII.GetBytes("type: {class: ");
+        private static readonly byte[] DataKey = Encoding.ASCII.GetBytes("data:");
         private const int GuidLength = 32;
         private const int HeaderLength = 256;
 
@@ -547,6 +561,8 @@ namespace SST.StableRef
             public bool MayHold;
             /// <summary>GUIDs of the prefabs instantiated in the file (nested prefabs, the base of a variant).</summary>
             public List<string> SourcePrefabs;
+            /// <summary>See <see cref="ScanSource.HasRecordWithoutData"/>.</summary>
+            public bool RecordWithoutData;
         }
 
         /// <summary>
@@ -559,6 +575,13 @@ namespace SST.StableRef
         /// Files are read in parallel without touching the Unity API.
         /// </summary>
         internal static List<string> FilterScanPaths(IReadOnlyList<string> paths)
+            => FilterScanFiles(paths).Select(f => f.Path).ToList();
+
+        /// <summary>
+        /// <see cref="FilterScanPaths"/>, with whether each kept file has a record without <c>data:</c>
+        /// (<see cref="ScanSource.HasRecordWithoutData"/>), found in the same parallel pass.
+        /// </summary>
+        private static List<(string Path, bool RecordWithoutData)> FilterScanFiles(IReadOnlyList<string> paths)
         {
             var physical = new string[paths.Count];
             for (int i = 0; i < paths.Count; i++)
@@ -572,10 +595,10 @@ namespace SST.StableRef
                 byGuid[AssetDatabase.AssetPathToGUID(paths[i])] = i;
 
             var resolved = new Dictionary<string, bool>();
-            var result = new List<string>();
+            var result = new List<(string, bool)>();
             for (int i = 0; i < paths.Count; i++)
                 if (MayHold(checks[i], byGuid, checks, resolved))
-                    result.Add(paths[i]);
+                    result.Add((paths[i], checks[i].RecordWithoutData));
             return result;
         }
 
@@ -611,15 +634,15 @@ namespace SST.StableRef
         {
             byte[] bytes;
             try { bytes = File.ReadAllBytes(physicalPath); }
-            catch (Exception) { return new FileCheck { MayHold = true }; }
+            catch (Exception) { return new FileCheck { MayHold = true, RecordWithoutData = true }; }
 
             int header = Math.Min(bytes.Length, HeaderLength);
             if (IndexOf(bytes, YamlHeader, 0, header) != 0 || IndexOf(bytes, UnityYamlTag, 0, header) < 0)
-                return new FileCheck { MayHold = true };
+                return new FileCheck { MayHold = true, RecordWithoutData = true };
             if (IndexOf(bytes, EntryMarker, 0, bytes.Length) >= 0
                 || IndexOf(bytes, ListItemsKey, 0, bytes.Length) >= 0
                 || IndexOf(bytes, ListItemsOverride, 0, bytes.Length) >= 0)
-                return new FileCheck { MayHold = true };
+                return new FileCheck { MayHold = true, RecordWithoutData = HasRecordWithoutData(bytes) };
 
             List<string> sources = null;
             int at = 0;
@@ -633,7 +656,29 @@ namespace SST.StableRef
                     (sources ??= new List<string>()).Add(Encoding.ASCII.GetString(bytes, guid + GuidKey.Length, GuidLength));
                 at = end;
             }
-            return new FileCheck { SourcePrefabs = sources };
+            // Only a file that instantiates a prefab can still be kept; the others never reach the scan.
+            return new FileCheck { SourcePrefabs = sources, RecordWithoutData = sources != null && HasRecordWithoutData(bytes) };
+        }
+
+        /// <summary>
+        /// Whether a managed-reference record of a class (not the null record) is followed by no <c>data:</c> line.
+        /// </summary>
+        internal static bool HasRecordWithoutData(byte[] bytes)
+        {
+            int at = 0;
+            while ((at = IndexOf(bytes, RecordTypeKey, at, bytes.Length)) >= 0)
+            {
+                at += RecordTypeKey.Length;
+                if (at < bytes.Length && bytes[at] == (byte)',') continue;
+
+                int next = Array.IndexOf(bytes, (byte)'\n', at);
+                if (next < 0) return true;
+                next++;
+                while (next < bytes.Length && (bytes[next] == (byte)' ' || bytes[next] == (byte)'\r' || bytes[next] == (byte)'\n'))
+                    next++;
+                if (IndexOf(bytes, DataKey, next, Math.Min(bytes.Length, next + DataKey.Length)) != next) return true;
+            }
+            return false;
         }
 
         /// <summary>First index of <paramref name="pattern"/> in <paramref name="data"/>[start, end), or -1.</summary>

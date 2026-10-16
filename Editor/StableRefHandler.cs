@@ -90,7 +90,9 @@ namespace SST.StableRef
             var controlRect = label != GUIContent.none ? EditorGUI.PrefixLabel(lineRect, label) : lineRect;
             var btnRect = new Rect(position.xMax - BtnW, position.y, BtnW, h);
 
-            options.LabelOverride = StableRefEntry.BuildMissingLabel(property);
+            options.LabelOverride = StableRefFileRepair.TryGetBrokenClass(property, out string brokenClass)
+                ? new GUIContent(StableRefFileRepair.BrokenLabelText(brokenClass))
+                : StableRefEntry.BuildMissingLabel(property);
             options.LabelColor = StableRefEntry.MissingLabelColor;
 
             StableRefSelectorField.Draw(controlRect, valueProp, GUIContent.none, options);
@@ -107,8 +109,9 @@ namespace SST.StableRef
             EditorApplication.delayCall += () =>
             {
                 int unresolvedTotal = 0;
-                foreach (var target in targets)
+                foreach (var original in targets)
                 {
+                    var target = StableRefFileRepair.RestoreBeforeFix(original);
                     if (target == null) continue;
 
                     int fixedCount = StableRefMissingTypesWindow.FixTarget(target, out int unresolved, wrapperPath);

@@ -93,6 +93,11 @@ namespace SST.StableRef.Tests
         public TArg Arg;
     }
 
+    /// <summary>Renamed from <c>OldMovedThing</c>: Unity loads records of the old name, so they are not unreadable.</summary>
+    [Serializable]
+    [UnityEngine.Scripting.APIUpdating.MovedFrom(false, sourceClassName: "OldMovedThing")]
+    public class MovedThing : ITestThing { }
+
     [Serializable]
     [RefTypeId("stableref-tests.meta")]
     public class MetaThing : ITestThing { }

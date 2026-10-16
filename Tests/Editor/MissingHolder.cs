@@ -11,5 +11,6 @@ namespace SST.StableRef.Tests
         [SerializeReference] public ITestThing A;
         [SerializeReference] public ITestThing B;
         public StableRef<ITestThing> Ref = new();
+        public StableRef<ITestThing> Other = new();
     }
 }
