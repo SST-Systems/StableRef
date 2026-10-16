@@ -47,10 +47,10 @@ namespace SST.StableRef.Tests
             Assert.AreEqual(11, report.ConvertedFields);
 
             var asset = AssetDatabase.LoadAssetAtPath<MigrationTestAsset>(path);
-            var single = (MigrationThingA)asset.Single.Value;
+            var single = (MigrationThingA)asset.Single.Reference;
             Assert.AreEqual(5, single.Number);
-            Assert.AreEqual("child", ((MigrationThingB)single.Child.Value).Name);
-            Assert.IsNull(asset.Empty.Value);
+            Assert.AreEqual("child", ((MigrationThingB)single.Child.Reference).Name);
+            Assert.IsNull(asset.Empty.Reference);
             Assert.AreEqual(new[] { "a", "b" }, new[] { Name(asset.List[0]), Name(asset.List[1]) });
             Assert.AreEqual("renamed", Name(asset.Renamed[0]));
             Assert.AreEqual(0, asset.NoItems.Count);
@@ -58,7 +58,7 @@ namespace SST.StableRef.Tests
             Assert.AreEqual(2, asset.NestedArray.Count);
             Assert.AreEqual("group", Name(asset.NestedArray[0].Items[0]));
             Assert.AreEqual(0, asset.NestedArray[1].Items.Count);
-            Assert.AreEqual("plain-child", Name(((MigrationThingA)asset.Plain).Child.Value));
+            Assert.AreEqual("plain-child", Name(((MigrationThingA)asset.Plain).Child.Reference));
             Assert.AreEqual("property", Name(asset.Property[0]));
 
             string text = File.ReadAllText(path);
@@ -159,18 +159,18 @@ namespace SST.StableRef.Tests
             Assert.AreEqual(4, report.RewrittenOverrides);
 
             var source = AssetDatabase.LoadAssetAtPath<GameObject>(basePath).GetComponent<MigrationTestBehaviour>();
-            Assert.AreEqual(1, ((MigrationThingA)source.Single.Value).Number);
+            Assert.AreEqual(1, ((MigrationThingA)source.Single.Reference).Number);
             Assert.AreEqual(2, source.List.Count);
-            Assert.IsNull(source.Other.Value);
+            Assert.IsNull(source.Other.Reference);
 
             var variant = AssetDatabase.LoadAssetAtPath<GameObject>(variantPath).GetComponent<MigrationTestBehaviour>();
-            Assert.AreEqual(9, ((MigrationThingA)variant.Single.Value).Number, "override inside an inherited value");
+            Assert.AreEqual(9, ((MigrationThingA)variant.Single.Reference).Number, "override inside an inherited value");
             Assert.AreEqual(3, variant.List.Count, "override of the list size");
             Assert.AreEqual("a", Name(variant.List[0]));
             var added = (MigrationThingA)variant.List[2];
             Assert.AreEqual(7, added.Number, "element added by the variant");
-            Assert.AreEqual("variant-child", Name(added.Child.Value), "StableRef inside an added value");
-            Assert.AreEqual("s", Name(variant.Other.Value), "single reference set by the variant");
+            Assert.AreEqual("variant-child", Name(added.Child.Reference), "StableRef inside an added value");
+            Assert.AreEqual("s", Name(variant.Other.Reference), "single reference set by the variant");
 
             string text = File.ReadAllText(variantPath);
             StringAssert.Contains("propertyPath: List._items.Array.data[2].Value", text);
@@ -237,7 +237,7 @@ namespace SST.StableRef.Tests
             try
             {
                 var behaviour = scene.GetRootGameObjects()[0].GetComponent<MigrationTestBehaviour>();
-                Assert.AreEqual(1, ((MigrationThingA)behaviour.Single.Value).Number);
+                Assert.AreEqual(1, ((MigrationThingA)behaviour.Single.Reference).Number);
                 Assert.AreEqual(new[] { "a", "b" }, new[] { Name(behaviour.List[0]), Name(behaviour.List[1]) });
             }
             finally { EditorSceneManager.CloseScene(scene, true); }

@@ -96,7 +96,7 @@ namespace SST.StableRef.Tests
 
             var wrapped = JsonConvert.DeserializeObject<WrappedConfig>(json, Auto());
 
-            Assert.AreEqual(7, ((Fire)wrapped.Effect.Value).Damage);
+            Assert.AreEqual(7, ((Fire)wrapped.Effect.Reference).Damage);
             Assert.AreEqual(2, wrapped.Effects.Count);
             Assert.AreEqual(4, ((Ice)wrapped.Effects[0]).Slow);
             Assert.IsNull(wrapped.Effects[1]);
@@ -113,7 +113,7 @@ namespace SST.StableRef.Tests
             var config = JsonConvert.DeserializeObject<WrappedConfig>(
                 "{\"effect\":{\"$Type\":\"Fire\",\"Damage\":11},\"Effects\":[{\"$Type\":\"Ice\",\"Slow\":4}]}", settings);
 
-            Assert.AreEqual(11, ((Fire)config.Effect.Value).Damage);
+            Assert.AreEqual(11, ((Fire)config.Effect.Reference).Damage);
             Assert.AreEqual(4, ((Ice)config.Effects[0]).Slow);
         }
 
@@ -128,8 +128,8 @@ namespace SST.StableRef.Tests
             JsonConvert.PopulateObject("{\"effect\":{\"Damage\":42}}", wrapped, Auto());
             JsonConvert.PopulateObject("{\"effect\":{\"Damage\":42}}", bare, Auto());
 
-            Assert.AreEqual(ReferenceEquals(bare.Effect, bareExisting), ReferenceEquals(wrapped.Effect.Value, existing));
-            Assert.AreEqual(42, ((Fire)wrapped.Effect.Value).Damage);
+            Assert.AreEqual(ReferenceEquals(bare.Effect, bareExisting), ReferenceEquals(wrapped.Effect.Reference, existing));
+            Assert.AreEqual(42, ((Fire)wrapped.Effect.Reference).Damage);
         }
 
         [TestCase(ObjectCreationHandling.Auto)]
@@ -173,7 +173,7 @@ namespace SST.StableRef.Tests
             Assert.AreEqual("fire-id", config.Effect.TypeId);
 
             JsonConvert.PopulateObject("{\"effect\":{\"$type\":\"" + Name<Ice>() + "\"}}", config, Auto());
-            Assert.IsInstanceOf<Ice>(config.Effect.Value);
+            Assert.IsInstanceOf<Ice>(config.Effect.Reference);
             Assert.IsTrue(string.IsNullOrEmpty(config.Effect.TypeId));
         }
 
@@ -182,7 +182,7 @@ namespace SST.StableRef.Tests
         {
             var config = JsonConvert.DeserializeObject<WrappedConfig>("{\"effect\":null}", Auto());
             Assert.IsNotNull(config.Effect);
-            Assert.IsNull(config.Effect.Value);
+            Assert.IsNull(config.Effect.Reference);
         }
 
         [Test]
@@ -204,7 +204,7 @@ namespace SST.StableRef.Tests
             var json = "{\"effect\":{\"TypeId\":\"x\",\"TypeDisplayName\":\"Fire\",\"ValuesData\":\"#v2\"," +
                        "\"Value\":{\"$type\":\"" + Name<Fire>() + "\",\"Damage\":3}}}";
             var config = JsonConvert.DeserializeObject<WrappedConfig>(json, Auto());
-            Assert.AreEqual(3, ((Fire)config.Effect.Value).Damage);
+            Assert.AreEqual(3, ((Fire)config.Effect.Reference).Damage);
         }
 
         [Test]
@@ -215,7 +215,7 @@ namespace SST.StableRef.Tests
             var json = "{\"effect\":{\"TypeId\":\"x\",\"Value\":{\"$type\":\"" + Name<Fire>() + "\",\"Damage\":3}}," +
                        "\"Effects\":[{\"TypeId\":\"y\",\"Value\":{\"$type\":\"" + Name<Ice>() + "\",\"Slow\":6}}]}";
             var config = JsonConvert.DeserializeObject<WrappedConfig>(json, Auto());
-            Assert.AreEqual(3, ((Fire)config.Effect.Value).Damage);
+            Assert.AreEqual(3, ((Fire)config.Effect.Reference).Damage);
             Assert.AreEqual(6, ((Ice)config.Effects[0]).Slow);
         }
 
@@ -223,7 +223,7 @@ namespace SST.StableRef.Tests
         public void Read_DoesNotUnwrapValueWithOtherMembers()
         {
             var json = "{\"effect\":{\"$type\":\"" + Name<Tagged>() + "\",\"TypeId\":\"t\",\"Value\":1,\"Extra\":2}}";
-            var tagged = JsonConvert.DeserializeObject<WrappedConfig>(json, Auto()).Effect.Value as Tagged;
+            var tagged = JsonConvert.DeserializeObject<WrappedConfig>(json, Auto()).Effect.Reference as Tagged;
             Assert.NotNull(tagged);
             Assert.AreEqual(1, tagged.Value);
             Assert.AreEqual(2, tagged.Extra);
@@ -247,7 +247,7 @@ namespace SST.StableRef.Tests
             Assert.IsFalse(StableRefJson.DataEquals(a, null));
             Assert.IsFalse(StableRefJson.DataEquals(a, new BareConfig()), "different root types");
 
-            ((Fire)b.Effect.Value).Damage = 8;
+            ((Fire)b.Effect.Reference).Damage = 8;
             Assert.IsFalse(StableRefJson.DataEquals(a, b), "value field");
 
             b = Make();

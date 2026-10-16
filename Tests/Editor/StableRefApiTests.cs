@@ -137,7 +137,7 @@ namespace SST.StableRef.Tests
 
             var entry = (StableRefBase)refField.GetValue(holder);
             entry.BoxedValue = new BetaThing { B = 5 };
-            Assert.AreEqual(5, ((BetaThing)holder.Ref.Value).B);
+            Assert.AreEqual(5, ((BetaThing)holder.Ref.Reference).B);
             Assert.Throws<ArgumentException>(() => entry.BoxedValue = "not a thing");
 
             var list = (StableRefListBase)listField.GetValue(holder);
@@ -155,9 +155,9 @@ namespace SST.StableRef.Tests
             var original = new StableRef<ITestThing>(value) { TypeId = "stableref-tests.beta" };
 
             var copy = original.ShallowCopy();
-            copy.Value = new AlphaThing();
+            copy.Reference = new AlphaThing();
 
-            Assert.AreSame(value, original.Value, "assigning on the copy leaves the original alone");
+            Assert.AreSame(value, original.Reference, "assigning on the copy leaves the original alone");
             Assert.AreEqual("stableref-tests.beta", original.ShallowCopy().TypeId);
         }
 
@@ -182,7 +182,7 @@ namespace SST.StableRef.Tests
 
             // An entry stamped by an older version with the base class's id.
             var holder = NewHolder();
-            holder.Ref.Value = new AlphaChild();
+            holder.Ref.Reference = new AlphaChild();
             holder.Ref.TypeId = "stableref-tests.alpha";
 
             Assert.AreEqual(1, StableRefResync.ResyncObject(holder));
@@ -193,12 +193,12 @@ namespace SST.StableRef.Tests
         public void Resync_StampsCodeWrittenValues_AndIsIdempotent()
         {
             var holder = NewHolder();
-            holder.Ref.Value = new AlphaThing { Inner = new StableRef<ITestThing>(new BetaThing()) };
+            holder.Ref.Reference = new AlphaThing { Inner = new StableRef<ITestThing>(new BetaThing()) };
             holder.List.Add(new MappedThing());
 
             Assert.AreEqual(3, StableRefResync.ResyncObject(holder));
             Assert.AreEqual("stableref-tests.alpha", holder.Ref.TypeId);
-            Assert.AreEqual("stableref-tests.beta", ((AlphaThing)holder.Ref.Value).Inner.TypeId);
+            Assert.AreEqual("stableref-tests.beta", ((AlphaThing)holder.Ref.Reference).Inner.TypeId);
             Assert.AreEqual("stableref-tests.mapped", holder.List.Items[0].TypeId);
             StringAssert.Contains("Inner.TypeId=stableref-tests.beta", holder.Ref.ValuesData,
                 "outer snapshot taken after the nested entry was stamped");
@@ -210,14 +210,14 @@ namespace SST.StableRef.Tests
         public void Resync_RefreshesSnapshotAndReplacesStaleId()
         {
             var holder = NewHolder();
-            holder.Ref.Value = new AlphaThing { Number = 1 };
+            holder.Ref.Reference = new AlphaThing { Number = 1 };
             StableRefResync.ResyncObject(holder);
 
-            ((AlphaThing)holder.Ref.Value).Number = 77;
+            ((AlphaThing)holder.Ref.Reference).Number = 77;
             Assert.AreEqual(1, StableRefResync.ResyncObject(holder));
             StringAssert.Contains("Number=77", holder.Ref.ValuesData);
 
-            holder.Ref.Value = new BetaThing();
+            holder.Ref.Reference = new BetaThing();
             Assert.AreEqual(1, StableRefResync.ResyncObject(holder));
             Assert.AreEqual("stableref-tests.beta", holder.Ref.TypeId);
         }
@@ -226,12 +226,12 @@ namespace SST.StableRef.Tests
         public void Resync_ClearsStaleIdForTypeWithoutId_AndKeepsMissingEntries()
         {
             var holder = NewHolder();
-            holder.Ref.Value = new NoIdThing();
+            holder.Ref.Reference = new NoIdThing();
             holder.Ref.TypeId = "stableref-tests.alpha";
             holder.Ref.ValuesData = "#v2\nNumber=1";
             holder.List.Add(new BetaThing());
             holder.List.Items[0].TypeId = "stableref-tests.beta";
-            holder.List.Items[0].Value = null;
+            holder.List.Items[0].Reference = null;
 
             Assert.AreEqual(1, StableRefResync.ResyncObject(holder));
             Assert.IsTrue(string.IsNullOrEmpty(holder.Ref.TypeId), "the id of another type must not survive");
@@ -243,11 +243,11 @@ namespace SST.StableRef.Tests
         public void MetadataReport_CountsEveryEntryInBinaryFormat()
         {
             var holder = NewHolder();
-            holder.Ref.Value = new BetaThing();
+            holder.Ref.Reference = new BetaThing();
             holder.Ref.TypeId = "abc";
             holder.List.Add(new BetaThing());
             holder.List.Items[0].TypeId = "missing-id";
-            holder.List.Items[0].Value = null;
+            holder.List.Items[0].Reference = null;
 
             var size = StableRefMetadataReport.MeasureObject(holder);
 
@@ -339,7 +339,7 @@ namespace SST.StableRef.Tests
         public void ChildrenDrawer_ProvidesHeightOfExpandedValue()
         {
             var holder = NewHolder();
-            holder.Ref.Value = new BetaThing();
+            holder.Ref.Reference = new BetaThing();
             var valueProp = new SerializedObject(holder).FindProperty("Ref.Value");
             valueProp.isExpanded = true;
 
@@ -476,7 +476,7 @@ namespace SST.StableRef.Tests
         public void ManagedReferenceType_MatchesValueType()
         {
             var holder = NewHolder();
-            holder.Ref.Value = new MappedGeneric<List<int>>();
+            holder.Ref.Reference = new MappedGeneric<List<int>>();
             holder.Plain = new OuterOfThing.NestedThing();
             holder.PlainList.Add(new MappedGeneric<OuterOfThing.NestedThing>());
             holder.PlainList.Add(null);
@@ -497,7 +497,7 @@ namespace SST.StableRef.Tests
         private TestHolder NewPopulatedHolder()
         {
             var holder = NewHolder();
-            holder.Ref.Value = new AlphaThing { Ints = { 1, 2, 3 }, Inner = new StableRef<ITestThing>(new BetaThing()) };
+            holder.Ref.Reference = new AlphaThing { Ints = { 1, 2, 3 }, Inner = new StableRef<ITestThing>(new BetaThing()) };
             holder.List.Add(new BetaThing());
             holder.List.Add(null);
             holder.List.Add(new OuterOfThing.NestedThing { Children = { new AlphaThing(), new MappedGeneric<int>() } });

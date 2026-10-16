@@ -128,7 +128,7 @@ namespace SST.StableRef.Migration
             var code = MigrationCodeRewriter.Plan(CodeRoots);
             string message = code.Changed
                 ? $"Changes the type of {code.ConvertedFields} [SerializeReference] field(s) in the scripts to StableRef<T> / " +
-                  "StableRefList<T> (same names). Code that uses such a field gets .Value where the compiler reports it " +
+                  "StableRefList<T> (same names). Code that uses such a field gets .Reference where the compiler reports it " +
                   "(and where it would silently test the wrapper); what is left is listed for a manual fix. " +
                   "Once the scripts compile, the saved data is moved into the new layout, prefab overrides are rewritten " +
                   "and stable ids and snapshots are stamped.\n\n"

@@ -97,13 +97,13 @@ public class ItemConfig : ScriptableObject
 }
 
 if (config.OnPickup.HasValue)
-    config.OnPickup.Value.Apply();
+    config.OnPickup.Reference.Apply();
 
 config.OnPickup.Set(new DamageOnHit { Amount = 5 });
 config.OnPickup = new StableRef<IEffect>(new DamageOnHit { Amount = 5 });
 ```
 
-Prefer `Set` over writing `.Value` directly: it keeps the stored ID up to date when the value's type changes. There are no implicit conversions between `StableRef<T>` and `T` — use `.Value` and the constructor.
+Prefer `Set` over writing `.Reference` directly: it keeps the stored ID up to date when the value's type changes. There are no implicit conversions between `StableRef<T>` and `T` — use `.Reference` and the constructor.
 
 ### Using StableRefList\<T\>
 
@@ -187,7 +187,7 @@ public class EffectAuthoring : MonoBehaviour
 }
 ```
 
-The field stays an ordinary `[SerializeReference]` (no `.Value`), and the attribute doesn't reach player builds. Useful for ECS authoring, for existing fields you don't want to migrate, and for large lists where per-entry metadata isn't worth it. To migrate existing fields with their data, see the [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.md) sample.
+The field stays an ordinary `[SerializeReference]` (no `.Reference`), and the attribute doesn't reach player builds. Useful for ECS authoring, for existing fields you don't want to migrate, and for large lists where per-entry metadata isn't worth it. To migrate existing fields with their data, see the [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.md) sample.
 
 > **Use at your own risk.** `[RefSelector]` fields have **no rename protection** and are not covered by **Find Usages** or **Fix Missing Types**. To rename such a class safely, add Unity's `[MovedFrom]` to it.
 

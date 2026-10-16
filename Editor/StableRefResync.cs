@@ -11,7 +11,7 @@ namespace SST.StableRef
     /// <summary>
     /// Brings the stable id and snapshot of every StableRef entry in line with its current value
     /// (<see cref="StableRefEntry.Refresh"/>). The inspector does this as you edit; values written by code — importers,
-    /// generators, <c>field.Value = ...</c> in editor scripts — are only covered once the field is drawn, and until
+    /// generators, <c>field.Reference = ...</c> in editor scripts — are only covered once the field is drawn, and until
     /// then a rename of their class can't be recovered (no id) or is recovered as the previous type (stale id).
     /// </summary>
     /// <remarks>

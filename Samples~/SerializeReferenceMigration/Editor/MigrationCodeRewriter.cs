@@ -20,7 +20,7 @@ namespace SST.StableRef.Migration
     /// [SerializeReference] private List&lt;IEffect&gt; _effects; →  [SerializeField] private StableRefList&lt;IEffect&gt; _effects;
     /// </code>
     /// An array or list becomes a <c>StableRefList&lt;T&gt;</c>. Code that uses the field is not touched: where it reads
-    /// the value it needs <c>.Value</c>, which the compiler points out. The rewriter also
+    /// the value it needs <c>.Reference</c>, which the compiler points out. The rewriter also
     /// adds a reference to <c>SST.StableRef</c> to the assembly definitions of the changed scripts and a
     /// <c>[RefTypeId]</c> to value types that have no stable id, so a later rename of their class is safe.
     /// </summary>

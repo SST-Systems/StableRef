@@ -1,5 +1,11 @@
 # StableRef
 
+## 5.0.0 - 16.10.2026
+
+### Breaking
+
+- **`StableRef<T>.Value` is renamed to `StableRef<T>.Reference`.** With a value type that has a `Value` of its own, reading it took `field.Value.Value`; now it is `field.Reference.Value`. Only the C# name changed: the serialized field is still `Value` (now private, behind the `Reference` property), so assets, prefab overrides, snapshots and `JsonUtility` data load as before and need no migration, and editor code that finds the value with `FindPropertyRelative("Value")` / `StableRefEntry.ValueFieldName` keeps working. Replace `.Value` with `.Reference` where the compiler reports it (CS1061 / CS0122); `Reference` is a property, so it can't be passed as `ref` / `out` any more. `HasValue`, `BoxedValue`, `Set` and the `StableRefList<T>` API are unchanged. The SerializeReference Migration sample now adds `.Reference` to the code it fixes, and the Newtonsoft.Json Converter sample populates `Reference` (the JSON it reads and writes is unchanged). Consumers gating on `versionDefines` must widen their ranges.
+
 ## 4.3.0 - 16.10.2026
 
 ### Added

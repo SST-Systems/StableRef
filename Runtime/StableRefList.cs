@@ -85,7 +85,7 @@ namespace SST.StableRef
         /// </summary>
         public T this[int index]
         {
-            get => Items[index]?.Value;
+            get => Items[index]?.Reference;
             set
             {
                 var items = Items;
@@ -108,7 +108,7 @@ namespace SST.StableRef
             var items = Items;
             var cmp = EqualityComparer<T>.Default;
             for (int i = 0; i < items.Count; i++)
-                if (cmp.Equals(items[i]?.Value, value)) return i;
+                if (cmp.Equals(items[i]?.Reference, value)) return i;
             return -1;
         }
 
@@ -119,7 +119,7 @@ namespace SST.StableRef
             var items = Items;
             for (int i = 0; i < items.Count; i++)
             {
-                var v = items[i]?.Value;
+                var v = items[i]?.Reference;
                 if (match(v)) return v;
             }
             return null;
@@ -131,7 +131,7 @@ namespace SST.StableRef
             if (match == null) throw new ArgumentNullException(nameof(match));
             var items = Items;
             for (int i = 0; i < items.Count; i++)
-                if (match(items[i]?.Value)) return i;
+                if (match(items[i]?.Reference)) return i;
             return -1;
         }
 
@@ -167,7 +167,7 @@ namespace SST.StableRef
         public int RemoveAll(Predicate<T> match)
         {
             if (match == null) throw new ArgumentNullException(nameof(match));
-            return Items.RemoveAll(it => match(it?.Value));
+            return Items.RemoveAll(it => match(it?.Reference));
         }
 
         /// <summary>Removes all elements.</summary>
@@ -181,7 +181,7 @@ namespace SST.StableRef
             if (arrayIndex < 0 || arrayIndex + items.Count > array.Length)
                 throw new ArgumentOutOfRangeException(nameof(arrayIndex));
             for (int i = 0; i < items.Count; i++)
-                array[arrayIndex + i] = items[i]?.Value;
+                array[arrayIndex + i] = items[i]?.Reference;
         }
 
         /// <summary>The values as a new array.</summary>
@@ -256,7 +256,7 @@ namespace SST.StableRef
             }
 
             /// <summary>The current value (<see langword="null"/> for an empty entry).</summary>
-            public T Current => _inner.Current?.Value;
+            public T Current => _inner.Current?.Reference;
 
             object IEnumerator.Current => Current;
 
