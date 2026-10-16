@@ -173,7 +173,7 @@ else if (StableRefReflection.IsStableRefList(field.FieldType, out var elementTyp
 
 Для поля вида `StableRefList<ICondition<Unit>>` селектор предлагает подходящие generic-типы, закрытые аргументом поля (`All<Unit>`, `Any<Unit>`). Каждому типу-аргументу нужен свой стабильный ID, как и любому другому типу StableRef.
 
-Под кнопкой-шестерёнкой селектора — его настройки: размер, *Category in Label* и *Deep Search*. С Deep Search поиск совпадает ещё и с именем файла скрипта, поэтому `Conditions` находит все классы из `Conditions.cs`.
+Под кнопкой-шестерёнкой селектора — его настройки: размер, *Category in Label*, *Namespace Categories* и *Deep Search*. Namespace Categories (включено по умолчанию) кладёт тип без `[RefCategory]` в категорию его неймспейса (`Game.Effects` → *Game/Effects*); `[RefCategory]` всегда в приоритете. С Deep Search поиск совпадает ещё и с именем файла скрипта, поэтому `Conditions` находит все классы из `Conditions.cs`.
 
 ### Селектор без обёртки: [RefSelector]
 

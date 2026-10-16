@@ -173,7 +173,7 @@ else if (StableRefReflection.IsStableRefList(field.FieldType, out var elementTyp
 
 For a field like `StableRefList<ICondition<Unit>>` the selector offers matching generic types closed with the field's argument (`All<Unit>`, `Any<Unit>`). Each type used as a generic argument needs its own stable ID, like any other StableRef type.
 
-The selector's gear button holds its settings: size, *Category in Label* and *Deep Search*. With Deep Search on, the search also matches the script file name, so `Conditions` finds every class declared in `Conditions.cs`.
+The selector's gear button holds its settings: size, *Category in Label*, *Namespace Categories* and *Deep Search*. Namespace Categories (on by default) lists a type without `[RefCategory]` under its namespace (`Game.Effects` → *Game/Effects*); `[RefCategory]` always takes precedence. With Deep Search on, the search also matches the script file name, so `Conditions` finds every class declared in `Conditions.cs`.
 
 ### Selector without a wrapper: [RefSelector]
 

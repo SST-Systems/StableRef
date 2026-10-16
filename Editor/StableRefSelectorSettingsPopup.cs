@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using UnityEditor;
+using UnityEditorInternal;
 using UnityEngine;
 
 namespace SST.StableRef
@@ -16,13 +17,16 @@ namespace SST.StableRef
             "Also match the name of the script file that declares each type — finds several classes per file and classes " +
             "named unlike their file. The first search builds an index of the source files in the background.");
 
+        private static readonly GUIContent _namespaceLabel = new("Namespace Categories",
+            "List a type that has no [RefCategory] under its namespace.");
+
         internal static void Show(Rect screenPos, StableRefSelectorWindow owner)
         {
             var win = CreateInstance<StableRefSelectorSettingsPopup>();
             win._owner = owner;
             win._w = StableRefSelectorWindow.SavedW;
             win._h = StableRefSelectorWindow.SavedH;
-            win.ShowAsDropDown(screenPos, new Vector2(180f, 136f));
+            win.ShowAsDropDown(screenPos, new Vector2(200f, 156f));
         }
 
         private void OnGUI()
@@ -35,9 +39,18 @@ namespace SST.StableRef
             _h = Mathf.Max(StableRefSelectorWindow.MinH, EditorGUILayout.FloatField("Height", _h));
 
             GUILayout.Space(4f);
-            EditorGUIUtility.labelWidth = 120f;
+            EditorGUIUtility.labelWidth = 140f;
             StableRefSelectorWindow.ShowCategoryInLabel = EditorGUILayout.Toggle(
                 "Category in Label", StableRefSelectorWindow.ShowCategoryInLabel);
+
+            EditorGUI.BeginChangeCheck();
+            bool ns = EditorGUILayout.Toggle(_namespaceLabel, StableRefSelectorWindow.NamespaceCategories);
+            if (EditorGUI.EndChangeCheck())
+            {
+                StableRefSelectorWindow.NamespaceCategories = ns;
+                if (_owner != null) _owner.OnCategoriesChanged();
+                InternalEditorUtility.RepaintAllViews();
+            }
 
             EditorGUI.BeginChangeCheck();
             bool deep = EditorGUILayout.Toggle(_deepSearchLabel, StableRefSelectorWindow.DeepSearch);

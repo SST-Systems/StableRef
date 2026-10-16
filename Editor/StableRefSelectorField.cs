@@ -163,6 +163,8 @@ namespace SST.StableRef
             }
         }
 
+        internal static void ClearLabelCache() => _labelCache.Clear();
+
         private static string GetCurrentLabel(SerializedProperty property)
         {
             var value = property.managedReferenceValue;
