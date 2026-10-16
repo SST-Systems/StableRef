@@ -6,7 +6,7 @@ This sample switches a project from plain `[SerializeReference]` fields to Stabl
 with one button. It rewrites the field declarations in your scripts, waits for them to compile, then moves the data
 of every asset, prefab and scene into the new layout.
 
-> **It is a migration helper, not a guarantee.** The code that uses the fields is fixed as text, by rules: a `.Value`
+> **It is a migration helper, not a guarantee.** The code that uses the fields is fixed as text, by rules: a `.Reference`
 > can be missed or put where it doesn't belong, and some such places still compile — `effect != null` would silently
 > test the wrapper instead of the value. Review every changed script before committing, go through the warnings in
 > the console, and test the game.
@@ -22,7 +22,7 @@ of every asset, prefab and scene into the new layout.
 ```
 
 Only the type changes: the field keeps its name, access and other attributes, so its data stays under the same key.
-Code that reads the value gets `.Value` (`effect.Value.Apply()`, `effect.Set(new Burn())`).
+Code that reads the value gets `.Reference` (`effect.Reference.Apply()`, `effect.Set(new Burn())`).
 
 Why a tool is needed: Unity can't read the old data into the new field — it loads the field empty and drops the old
 data on the next save. So the migration rewrites the files themselves, before anything saves them.
@@ -57,7 +57,7 @@ changes nothing. After that the sample can be deleted.
 
 - Every `[SerializeReference]` field in scripts under `Assets/` is retyped in place: `T` → `StableRef<T>`, `T[]` / `List<T>` → `StableRefList<T>`. No extra fields or properties are added.
 - `[SerializeReference]` is removed from public fields and replaced with `[SerializeField]` on non-public ones. Fields get `= new()` (or their initializer is wrapped) so the wrapper is never `null`.
-- Code that reads the fields gets `.Value` — both where it would stop compiling and where it would compile but check the wrapper instead of the value (`effect != null`, `effect is Burn`, `effect.GetType()`…). Writes become `.Set(…)`.
+- Code that reads the fields gets `.Reference` — both where it would stop compiling and where it would compile but check the wrapper instead of the value (`effect != null`, `effect is Burn`, `effect.GetType()`…). Writes become `.Set(…)`.
 - A use is changed only when it surely refers to the retyped field; doubtful places are reported as warnings.
 - Assembly definitions get a reference to `SST.StableRef`, scripts get `using SST.StableRef;`, and value types that share a file get a `[RefTypeId]`.
 - Skipped (and reported): `[RefSelector]` fields, fields of generic parameter types, declarations spanning several lines or declaring several fields.

@@ -180,7 +180,7 @@ namespace SST.StableRef
         /// </summary>
         /// <remarks>
         /// The inspector keeps entries in sync as they are edited; this is for values written by code (importers,
-        /// generators, <c>field.Value = ...</c>) — see <see cref="StableRefResync"/>.
+        /// generators, <c>field.Reference = ...</c>) — see <see cref="StableRefResync"/>.
         /// </remarks>
         public static bool Refresh(SerializedProperty entry)
         {

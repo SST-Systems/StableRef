@@ -10,8 +10,8 @@ namespace SST.StableRef.Migration
     /// Fixes the code that uses fields retyped to <c>StableRef&lt;T&gt;</c> / <c>StableRefList&lt;T&gt;</c>, as text: the
     /// compiler errors such a retype causes (<see cref="FixDiagnostics"/>), and the uses the compiler accepts but that now
     /// mean something else (<see cref="FixSilentUses"/>) — <c>field != null</c>, <c>field is null</c> and
-    /// <c>field.GetType()</c> test the wrapper, <c>field.Value</c> reads the wrapper's value instead of the value's own
-    /// <c>Value</c>.
+    /// <c>field.GetType()</c> test the wrapper, <c>field.Reference</c> reads the wrapper's value instead of the value's own
+    /// <c>Reference</c>.
     /// </summary>
     /// <remarks>
     /// Works on the text alone, no Unity API: comments, strings and preprocessor lines are masked out first
@@ -53,7 +53,7 @@ namespace SST.StableRef.Migration
             /// <summary>No other member in the project has this name: qualified uses (<c>x.name</c>) are this field.</summary>
             public bool UniqueName;
             /// <summary>
-            /// Members of the value type that the wrapper has too (<c>Value</c>, <c>HasValue</c>…): <c>name.Member</c>
+            /// Members of the value type that the wrapper has too (<c>Reference</c>, <c>HasValue</c>…): <c>name.Member</c>
             /// compiles but reaches the wrapper's member.
             /// </summary>
             public HashSet<string> SharedMembers = new(StringComparer.Ordinal);
@@ -72,14 +72,14 @@ namespace SST.StableRef.Migration
             "CS1061", "CS0117", "CS1929", "CS0029", "CS0266", "CS1503", "CS0030", "CS0039", "CS1579", "CS0173", "CS8121", "CS0019", "CS0184"
         };
 
-        private const string ValueSuffix = ".Value";
+        private const string ReferenceSuffix = ".Reference";
 
         #region Compiler errors
 
         /// <summary>
         /// Applies the fixes the diagnostics of one file call for and returns the new text (the same instance when nothing
         /// changed). Only diagnostics about a <c>StableRef&lt;T&gt;</c> / <c>StableRefList&lt;T&gt;</c> value are fixed —
-        /// a read gets <c>.Value</c>, an assignment <c>.Set(…)</c> / <c>.Value =</c> / <c>new(…)</c>, a list
+        /// a read gets <c>.Reference</c>, an assignment <c>.Set(…)</c> / <c>.Reference =</c> / <c>new(…)</c>, a list
         /// <c>.Length</c> becomes <c>.Count</c> — plus <c>CS0184</c> (<c>field is Type</c>, a warning) on one of
         /// <paramref name="fieldNames"/>.
         /// </summary>
@@ -131,8 +131,8 @@ namespace SST.StableRef.Migration
                         Add(edits, offset, member.Length, "Count");
                         return true;
                     }
-                    if (dot >= 2 && m[dot - 2] == '?') Add(edits, dot - 2, 2, ".Value?.");
-                    else Add(edits, offset, 0, "Value.");
+                    if (dot >= 2 && m[dot - 2] == '?') Add(edits, dot - 2, 2, ".Reference?.");
+                    else Add(edits, offset, 0, "Reference.");
                     return true;
                 }
                 case "CS0117":
@@ -155,7 +155,7 @@ namespace SST.StableRef.Migration
                 {
                     // 'StableRef<T>' does not contain a definition for 'Method' and the best extension method overload
                     // … requires a receiver of type 'T' — an extension of the value called on the wrapper, reported at
-                    // the start of the receiver: `.Value` goes before `.Method`.
+                    // the start of the receiver: `.Reference` goes before `.Method`.
                     if (quoted.Count < 2 || WrapperKind(quoted[0]) != Kind.Single) return false;
                     return FixExtensionReceiver(m, offset, quoted[1], edits);
                 }
@@ -241,7 +241,7 @@ namespace SST.StableRef.Migration
                     {
                         int end = ChainEnd(m, offset, out _);
                         if (end < 0 || SkipWs(m, end) != opAt) return false;
-                        Add(edits, end, 0, ValueSuffix);
+                        Add(edits, end, 0, ReferenceSuffix);
                         any = true;
                     }
                     if (right)
@@ -249,7 +249,7 @@ namespace SST.StableRef.Migration
                         int start = SkipWs(m, opAt + op.Length);
                         int end = ChainEnd(m, start, out _);
                         if (end < 0 || !EndsExpression(m, end)) return any;
-                        Add(edits, end, 0, ValueSuffix);
+                        Add(edits, end, 0, ReferenceSuffix);
                         any = true;
                     }
                     return any;
@@ -259,7 +259,7 @@ namespace SST.StableRef.Migration
                     // The given expression is never of the provided type — `field is Type`, a warning only.
                     int end = ChainEnd(m, offset, out string last);
                     if (end < 0 || last == null || !names.Contains(last) || WordAt(m, SkipWs(m, end)) != "is") return false;
-                    Add(edits, end, 0, ValueSuffix);
+                    Add(edits, end, 0, ReferenceSuffix);
                     return true;
                 }
             }
@@ -268,8 +268,8 @@ namespace SST.StableRef.Migration
 
         /// <summary>
         /// <c>receiver.Method(…)</c> with the receiver starting at <paramref name="start"/>: the first call of
-        /// <paramref name="method"/> along the chain gets <c>.Value</c> before its <c>.</c> (<c>?.</c> becomes
-        /// <c>.Value?.</c>).
+        /// <paramref name="method"/> along the chain gets <c>.Reference</c> before its <c>.</c> (<c>?.</c> becomes
+        /// <c>.Reference?.</c>).
         /// </summary>
         private static bool FixExtensionReceiver(string m, int start, string method, List<Edit> edits)
         {
@@ -299,8 +299,8 @@ namespace SST.StableRef.Migration
                     int after = SkipWs(m, k + member.Length);
                     if (member == method && after < n && (m[after] == '(' || TypeArguments(m, after, out _) >= 0))
                     {
-                        if (conditional) Add(edits, j, 2, ".Value?.");
-                        else Add(edits, i, 0, ValueSuffix);
+                        if (conditional) Add(edits, j, 2, ".Reference?.");
+                        else Add(edits, i, 0, ReferenceSuffix);
                         return true;
                     }
                     i = k + member.Length;
@@ -321,19 +321,19 @@ namespace SST.StableRef.Migration
             }
         }
 
-        /// <summary>A read of a wrapper starting at <paramref name="start"/>: <c>.Value</c> after it, or in a conditional's branches.</summary>
+        /// <summary>A read of a wrapper starting at <paramref name="start"/>: <c>.Reference</c> after it, or in a conditional's branches.</summary>
         private static bool FixRead(string m, int start, ICollection<string> names, List<Edit> edits)
         {
             if (SplitConditional(m, start, out _, out _, out _)) return FixConditional(m, start, names, edits);
             int end = ChainEnd(m, start, out _);
             if (end < 0 || !ClosesExpression(m, end)) return false;
-            Add(edits, end, 0, ValueSuffix);
+            Add(edits, end, 0, ReferenceSuffix);
             return true;
         }
 
         /// <summary>
         /// <c>cond ? a : b</c> starting at <paramref name="start"/> (the compiler points at the condition): every branch
-        /// that is just one of <paramref name="names"/> gets <c>.Value</c>.
+        /// that is just one of <paramref name="names"/> gets <c>.Reference</c>.
         /// </summary>
         private static bool FixConditional(string m, int start, ICollection<string> names, List<Edit> edits)
         {
@@ -344,7 +344,7 @@ namespace SST.StableRef.Migration
                 int s = SkipWs(m, from), e = SkipWsBack(m, to);
                 int chainEnd = ChainEnd(m, s, out string last);
                 if (chainEnd != e || last == null || !names.Contains(last)) continue;
-                Add(edits, e, 0, ValueSuffix);
+                Add(edits, e, 0, ReferenceSuffix);
                 any = true;
             }
             return any;
@@ -352,8 +352,8 @@ namespace SST.StableRef.Migration
 
         /// <summary>
         /// An assignment of a plain value to a wrapper, reported at the right-hand side: a statement becomes
-        /// <c>x.Set(value);</c> (or <c>x.Value = …</c> when the value spans lines), an object-initializer member
-        /// <c>x = new(value)</c> (one line only), any other assignment <c>x.Value = …</c>. A list gets <c>new(values)</c>.
+        /// <c>x.Set(value);</c> (or <c>x.Reference = …</c> when the value spans lines), an object-initializer member
+        /// <c>x = new(value)</c> (one line only), any other assignment <c>x.Reference = …</c>. A list gets <c>new(values)</c>.
         /// </summary>
         private static bool FixWrite(string m, string text, int position, bool isList, List<Edit> edits)
         {
@@ -383,7 +383,7 @@ namespace SST.StableRef.Migration
             }
             if (!isList && !initializer)
             {
-                Add(edits, lhsEnd, 0, ValueSuffix);
+                Add(edits, lhsEnd, 0, ReferenceSuffix);
                 return true;
             }
             if (!statement && !initializer) return false;
@@ -428,7 +428,7 @@ namespace SST.StableRef.Migration
         /// <summary>
         /// A pattern on a wrapper: <c>x is Pattern</c>, <c>case Pattern:</c> of <c>switch (x)</c>, or an arm of
         /// <c>x switch { … }</c> — the subject before <c>is</c> / inside <c>switch ( )</c> / before <c>switch</c> gets
-        /// <c>.Value</c>.
+        /// <c>.Reference</c>.
         /// </summary>
         private static bool FixPatternSubject(string m, int offset, List<Edit> edits)
         {
@@ -446,7 +446,7 @@ namespace SST.StableRef.Migration
                     {
                         int end = SkipWsBack(m, p - 2);
                         if (end == 0 || !(IsIdentifierChar(m[end - 1]) || m[end - 1] == ')' || m[end - 1] == ']')) return false;
-                        Add(edits, end, 0, ValueSuffix);
+                        Add(edits, end, 0, ReferenceSuffix);
                         return true;
                     }
                     if (depth == 0 && word == "case") return FixSwitchStatementSubject(m, p, edits);
@@ -483,7 +483,7 @@ namespace SST.StableRef.Migration
             int close = beforeBrace - 1;
             int openParen = MatchOpen(m, close);
             if (openParen < 0 || WordBefore(m, SkipWsBack(m, openParen)) != "switch") return false;
-            Add(edits, SkipWsBack(m, close), 0, ValueSuffix);
+            Add(edits, SkipWsBack(m, close), 0, ReferenceSuffix);
             return true;
         }
 
@@ -494,7 +494,7 @@ namespace SST.StableRef.Migration
             if (WordBefore(m, beforeBrace) != "switch") return false;
             int subjectEnd = SkipWsBack(m, beforeBrace - "switch".Length);
             if (subjectEnd == 0) return false;
-            Add(edits, subjectEnd, 0, ValueSuffix);
+            Add(edits, subjectEnd, 0, ReferenceSuffix);
             return true;
         }
 
@@ -568,12 +568,12 @@ namespace SST.StableRef.Migration
         private enum Certainty { Unknown, Field, NotField }
 
         /// <summary>
-        /// Gives every read of a retyped field <c>.Value</c> before the first compile — the uses that would stop
+        /// Gives every read of a retyped field <c>.Reference</c> before the first compile — the uses that would stop
         /// compiling (<c>x.Apply()</c>, <c>x?.State</c>, <c>IEffect e = x</c>, <c>Use(x)</c>) and the ones that would
         /// keep compiling but test or read the wrapper (<c>x == null</c>, <c>x != y</c>, <c>null == x</c>,
         /// <c>x is …</c>, <c>x as T</c>, <c>x ?? y</c>, <c>x ??= y</c>, <c>x switch</c>, <c>switch (x)</c>,
         /// <c>ReferenceEquals(x, …)</c>, <c>x.GetType()</c>, <c>x.Equals(…)</c>, <c>x.GetHashCode()</c>,
-        /// <c>x.Member</c> where the value type has a member the wrapper has too (<c>Value</c>), <c>x</c> passed where a
+        /// <c>x.Member</c> where the value type has a member the wrapper has too (<c>Reference</c>), <c>x</c> passed where a
         /// parameter is <c>object</c> or a type parameter). Left alone: writes (<c>x = …</c>, which the compiler's
         /// messages turn into <c>.Set(…)</c>), the wrapper's own members (<c>x.Set(…)</c>, <c>x.TypeId</c>), a
         /// parameter that takes a StableRef, <c>nameof(x)</c>, <c>ref</c> / <c>out</c> arguments, named arguments and
@@ -626,13 +626,13 @@ namespace SST.StableRef.Migration
                     // A use that stops compiling is reported by the compiler, and fixed by its messages.
                     if (use.Loud) continue;
                     review.Add(use.UnresolvedCall
-                        ? $"{where} — '{name}' is {use.Pattern}, whose parameter couldn't be read; if '{name}' is the retyped field and the parameter takes object or a type parameter, add .Value"
-                        : $"{where} — {use.Pattern} on '{name}' may test the StableRef wrapper now; if '{name}' is the retyped field, add .Value");
+                        ? $"{where} — '{name}' is {use.Pattern}, whose parameter couldn't be read; if '{name}' is the retyped field and the parameter takes object or a type parameter, add .Reference"
+                        : $"{where} — {use.Pattern} on '{name}' may test the StableRef wrapper now; if '{name}' is the retyped field, add .Reference");
                     continue;
                 }
                 Add(edits, insertAt, remove, insert);
                 if (use.Prefix != null) Add(edits, use.PrefixAt, 0, use.Prefix);
-                changes.Add($"{where} — {use.Pattern}: .Value added");
+                changes.Add($"{where} — {use.Pattern}: .Reference added");
             }
 
             return Apply(text, edits);
@@ -675,8 +675,8 @@ namespace SST.StableRef.Migration
 
         /// <summary>
         /// <c>{ field: pattern }</c> on the type that declares the retyped field matches the wrapper, which is never
-        /// null: the member's pattern moves onto the value, <c>{ field: { Value: pattern } }</c> (C# 9 has no
-        /// <c>field.Value:</c>).
+        /// null: the member's pattern moves onto the value, <c>{ field: { Reference: pattern } }</c> (C# 9 has no
+        /// <c>field.Reference:</c>).
         /// </summary>
         private static void FixPropertyPattern(FileScope s, string text, List<int> lineStarts, int start, int end, int brace,
             int patternStart, int patternEnd, Field field, List<Edit> edits, List<string> changes, List<string> review)
@@ -691,12 +691,12 @@ namespace SST.StableRef.Migration
             string where = $"({LineOf(lineStarts, start) + 1}) {Snippet(text, start, end)}";
             if (certainty == Certainty.Unknown)
             {
-                review.Add($"{where} — the property pattern '{field.Name}: …' may match the StableRef wrapper now; if '{field.Name}' is the retyped field, write '{field.Name}: {{ Value: … }}'");
+                review.Add($"{where} — the property pattern '{field.Name}: …' may match the StableRef wrapper now; if '{field.Name}' is the retyped field, write '{field.Name}: {{ Reference: … }}'");
                 return;
             }
-            Add(edits, patternStart, 0, "{ Value: ");
+            Add(edits, patternStart, 0, "{ Reference: ");
             Add(edits, patternEnd, 0, " }");
-            changes.Add($"{where} — property pattern: {{ Value: … }} added");
+            changes.Add($"{where} — property pattern: {{ Reference: … }} added");
         }
 
         /// <summary>
@@ -798,10 +798,10 @@ namespace SST.StableRef.Migration
             return before > 0 && m[before - 1] == '.' && !(before > 1 && m[before - 2] == '.');
         }
 
-        /// <summary>How the name is used, if it's a read that needs <c>.Value</c>.</summary>
+        /// <summary>How the name is used, if it's a read that needs <c>.Reference</c>.</summary>
         private struct Use
         {
-            /// <summary>What the use is, for the report; <c>null</c> when it needs no <c>.Value</c>.</summary>
+            /// <summary>What the use is, for the report; <c>null</c> when it needs no <c>.Reference</c>.</summary>
             public string Pattern;
             /// <summary>With the wrapper the use stops compiling: the compiler reports it when the name can't be told.</summary>
             public bool Loud;
@@ -826,13 +826,13 @@ namespace SST.StableRef.Migration
 
         private static readonly string[] CompoundAssignments = { "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=", "++", "--" };
 
-        /// <summary>The use of the identifier at [start, end), and the edit that gives it <c>.Value</c>.</summary>
+        /// <summary>The use of the identifier at [start, end), and the edit that gives it <c>.Reference</c>.</summary>
         private static Use UseOf(FileScope s, int start, int end, Field field, out int insertAt, out int remove, out string insert)
         {
             string m = s.M;
             insertAt = end;
             remove = 0;
-            insert = ValueSuffix;
+            insert = ReferenceSuffix;
 
             // A declaration (`IEffect effect`, `var effect`, `effect =>`, `IEffect Effect { get; }`) or a call of a
             // method with the same name.
@@ -860,7 +860,7 @@ namespace SST.StableRef.Migration
             int enclosing = UnmatchedOpen(m, chainStart);
             if (enclosing >= 0 && m[enclosing] == '(' && WordBefore(m, SkipWsBack(m, enclosing)) is "nameof" or "typeof") return Use.None;
 
-            // Writes: `x = null` gets .Value (the wrapper is never null); other writes are the compiler's, as .Set(…).
+            // Writes: `x = null` gets .Reference (the wrapper is never null); other writes are the compiler's, as .Set(…).
             if (next < m.Length && m[next] == '=' && !Next(m, next, "==") && !Next(m, next, "=>"))
             {
                 return WordAt(m, SkipWs(m, next + 1)) == "null" && ClosesExpression(m, SkipWs(m, next + 1) + 4)
@@ -872,7 +872,7 @@ namespace SST.StableRef.Migration
             // `name: value` — a named argument (a property pattern is handled before); a conditional's branch is a read.
             if (next < m.Length && m[next] == ':' && !Next(m, next, "::") && (prev == '(' || prev == ',' || prev == '{' || prev == '\0'))
                 return Use.None;
-            // `new { o.effect }` names its member after the field: `.Value` alone would rename it to `Value`.
+            // `new { o.effect }` names its member after the field: `.Reference` alone would rename it to `Reference`.
             if ((prev == '{' || prev == ',') && next < m.Length && (m[next] == ',' || m[next] == '}'))
             {
                 int brace = UnmatchedOpen(m, chainStart);
@@ -894,7 +894,7 @@ namespace SST.StableRef.Migration
                 if (member.Length == 0 || (!silent && WrapperMembers.Contains(member))) return Use.None;
                 insertAt = next;
                 remove = 2;
-                insert = ".Value?.";
+                insert = ".Reference?.";
                 return silent ? Use.Silent($"?.{member}") : Use.Breaking($"?.{member}");
             }
             if (next < m.Length && m[next] == '[') return Use.Breaking("[…]");
@@ -1443,7 +1443,7 @@ namespace SST.StableRef.Migration
             int i = SkipWs(m, start);
             if (i >= end) return null;
             object type;
-            // The member just read, while it may be a retyped field whose `.Value` keeps the value's type.
+            // The member just read, while it may be a retyped field whose `.Reference` keeps the value's type.
             object retypedOwner = null;
             string retypedMember = null;
 
@@ -1516,7 +1516,7 @@ namespace SST.StableRef.Migration
                         type = CallType(s, type, member, a, out i, depth);
                         continue;
                     }
-                    if (member == "Value" && retypedOwner != null && model.IsRetyped(retypedOwner, retypedMember))
+                    if (member == "Reference" && retypedOwner != null && model.IsRetyped(retypedOwner, retypedMember))
                     {
                         retypedOwner = null;
                         i = e;

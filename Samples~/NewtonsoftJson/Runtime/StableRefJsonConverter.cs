@@ -37,6 +37,7 @@ namespace SST.StableRef.Json
     public sealed class StableRefJsonConverter : JsonConverter
     {
         private const string LegacyValue = "Value";
+        private const string ReferenceMember = nameof(StableRef<object>.Reference);
         private const string LegacyTypeId = "TypeId";
 
         private static readonly HashSet<string> _legacyMembers = new(StringComparer.Ordinal)
@@ -97,7 +98,7 @@ namespace SST.StableRef.Json
                 return entry;
             }
 
-            // Populating a scratch wrapper's Value member runs Newtonsoft's member logic for a field of type T:
+            // Populating a scratch wrapper's Reference member runs Newtonsoft's member logic for a field of type T:
             // $type handling, converters for T and reuse of the existing instance — the bare-field behaviour.
             // The result is then assigned through BoxedValue, which keeps the entry's metadata consistent.
             var valueProperty = FindValueProperty(serializer, objectType);
@@ -158,7 +159,7 @@ namespace SST.StableRef.Json
         {
             if (serializer.ContractResolver.ResolveContract(objectType) is not JsonObjectContract contract) return null;
             foreach (var property in contract.Properties)
-                if (property.UnderlyingName == LegacyValue && property.Writable && !property.Ignored)
+                if (property.UnderlyingName == ReferenceMember && property.Writable && !property.Ignored)
                     return property;
             return null;
         }

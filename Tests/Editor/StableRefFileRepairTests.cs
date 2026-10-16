@@ -158,16 +158,16 @@ namespace SST.StableRef.Tests
             string path = UnreadableAsset("", "");
             // Depending on the file, Unity loads such an object without its references or not at all (as here).
             var before = AssetDatabase.LoadAssetAtPath<MissingHolder>(path);
-            Assume.That(before == null || before.Ref.Value == null, "Unity can't read the object");
+            Assume.That(before == null || before.Ref.Reference == null, "Unity can't read the object");
             Assert.AreEqual(1, StableRefFileRepair.FindUnreadable(StableRefFileRepair.ReadDocument(path)).Count);
 
             Assert.AreEqual(StableRefFileRepair.RepairResult.Repaired, StableRefFileRepair.RepairAsset(path));
 
             var asset = AssetDatabase.LoadAssetAtPath<MissingHolder>(path);
-            var alpha = asset.Ref.Value as AlphaThing;
+            var alpha = asset.Ref.Reference as AlphaThing;
             Assert.NotNull(alpha, "the loaded object is updated by the reimport");
             Assert.AreEqual(5, alpha.Number);
-            Assert.IsNull(alpha.Inner.Value, "an entry without a stable id becomes None");
+            Assert.IsNull(alpha.Inner.Reference, "an entry without a stable id becomes None");
             StringAssert.DoesNotContain("GoneThing", File.ReadAllText(path));
             Assert.AreEqual(StableRefFileRepair.RepairResult.NothingToRepair, StableRefFileRepair.RepairAsset(path));
         }
@@ -185,7 +185,7 @@ namespace SST.StableRef.Tests
 
             Resources.UnloadAsset(asset);
             asset = AssetDatabase.LoadAssetAtPath<MissingHolder>(path);
-            var inner = ((AlphaThing)asset.Ref.Value).Inner.Value as BetaThing;
+            var inner = ((AlphaThing)asset.Ref.Reference).Inner.Reference as BetaThing;
             Assert.NotNull(inner, "the fix survives a reload from disk");
             Assert.AreEqual(7, inner.B);
         }
@@ -305,7 +305,7 @@ namespace SST.StableRef.Tests
             AssetDatabase.SaveAssetIfDirty(asset);
             Assume.That(StableRefFileRepair.FindUnreadable(StableRefFileRepair.ReadDocument(path)).Count, Is.EqualTo(1));
             SerializationUtility.ClearAllManagedReferencesWithMissingTypes(asset);
-            asset.Ref.Value = null;
+            asset.Ref.Reference = null;
 
             so = new SerializedObject(asset);
             Assert.IsTrue(StableRefFileRepair.TryGetBrokenClass(so.FindProperty("Ref"), out cls),
@@ -428,13 +428,13 @@ namespace SST.StableRef.Tests
             Assert.IsFalse(StableRefFileRepair.IsLostInMemory(asset, document), "a healthy object");
 
             // What a domain reload leaves of an object that held missing-type data: no value, nothing dirty.
-            asset.Ref.Value = null;
+            asset.Ref.Reference = null;
             Assert.IsFalse(EditorUtility.IsDirty(asset));
             Assert.IsTrue(StableRefFileRepair.IsLostInMemory(asset, document));
 
             var reloaded = (MissingHolder)StableRefFileRepair.ReloadAsset(asset);
             Assert.NotNull(reloaded);
-            Assert.AreEqual(3, ((BetaThing)reloaded.Ref.Value).B);
+            Assert.AreEqual(3, ((BetaThing)reloaded.Ref.Reference).B);
             Assert.IsFalse(StableRefFileRepair.IsLostInMemory(reloaded, document));
         }
     }

@@ -36,8 +36,8 @@ namespace SST.StableRef.Tests
         [Test]
         public void MemberAccess_GetsValue()
         {
-            Assert.AreEqual("o.effect.Value.Apply();", Fix("o.effect.Apply();", "CS1061", "Apply", NoMember));
-            Assert.AreEqual("o.effect.Value?.Apply();", Fix("o.effect?.Apply();", "CS1061", "?.", NoMember, 1),
+            Assert.AreEqual("o.effect.Reference.Apply();", Fix("o.effect.Apply();", "CS1061", "Apply", NoMember));
+            Assert.AreEqual("o.effect.Reference?.Apply();", Fix("o.effect?.Apply();", "CS1061", "?.", NoMember, 1),
                 "x?.M is reported at the dot");
             Assert.AreEqual("o.effects.Count", Fix("o.effects.Length", "CS1061", "Length",
                 "'StableRefList<IEffect>' does not contain a definition for 'Length'"));
@@ -47,13 +47,13 @@ namespace SST.StableRef.Tests
         public void Read_GetsValue_ConditionalBranchesToo()
         {
             const string convert = "Cannot implicitly convert type 'SST.StableRef.StableRef<IEffect>' to 'IEffect'";
-            Assert.AreEqual("IEffect e = o.effect.Value;", Fix("IEffect e = o.effect;", "CS0029", "o.effect", convert));
-            Assert.AreEqual("IEffect e = f && g ? o.effect.Value : null;",
+            Assert.AreEqual("IEffect e = o.effect.Reference;", Fix("IEffect e = o.effect;", "CS0029", "o.effect", convert));
+            Assert.AreEqual("IEffect e = f && g ? o.effect.Reference : null;",
                 Fix("IEffect e = f && g ? o.effect : null;", "CS0029", "f &&", convert), "reported at the condition");
-            Assert.AreEqual("Use(f ? new Burn() : o.effect.Value);",
+            Assert.AreEqual("Use(f ? new Burn() : o.effect.Reference);",
                 Fix("Use(f ? new Burn() : o.effect);", "CS1503", "f ?",
                     "Argument 1: cannot convert from 'target-typed conditional expression' to 'IEffect'"));
-            Assert.AreEqual("var b = (Burn)o.effect.Value;", Fix("var b = (Burn)o.effect;", "CS0030", "(Burn)",
+            Assert.AreEqual("var b = (Burn)o.effect.Reference;", Fix("var b = (Burn)o.effect;", "CS0030", "(Burn)",
                 "Cannot convert type 'SST.StableRef.StableRef<IEffect>' to 'Burn'"));
             Assert.AreEqual("IEffect[] a = o.effects.ToArray();", Fix("IEffect[] a = o.effects;", "CS0029", "o.effects",
                 "Cannot implicitly convert type 'SST.StableRef.StableRefList<IEffect>' to 'IEffect[]'"));
@@ -68,9 +68,9 @@ namespace SST.StableRef.Tests
         {
             const string extension = "'StableRef<IEffect>' does not contain a definition for 'Inject' and the best extension method " +
                                      "overload 'EffectExtensions.Inject(IEffect, Container)' requires a receiver of type 'IEffect'";
-            Assert.AreEqual("o.effect.Value.Inject(c);", Fix("o.effect.Inject(c);", "CS1929", "o.effect", extension),
+            Assert.AreEqual("o.effect.Reference.Inject(c);", Fix("o.effect.Inject(c);", "CS1929", "o.effect", extension),
                 "reported at the start of the receiver");
-            Assert.AreEqual("Get(o).effect.Value?.Inject<Foo>(c).Inject(d);", Fix("Get(o).effect?.Inject<Foo>(c).Inject(d);", "CS1929", "Get", extension),
+            Assert.AreEqual("Get(o).effect.Reference?.Inject<Foo>(c).Inject(d);", Fix("Get(o).effect?.Inject<Foo>(c).Inject(d);", "CS1929", "Get", extension),
                 "the first call along the chain");
         }
 
@@ -79,14 +79,14 @@ namespace SST.StableRef.Tests
         {
             Assert.AreEqual("if (o.effects is { Count: > 0 }) { }", Fix("if (o.effects is { Length: > 0 }) { }", "CS0117", "Length",
                 "'StableRefList<IEffect>' does not contain a definition for 'Length'"));
-            Assert.AreEqual("if (o.effect.Value is { Power: > 0 }) { }", Fix("if (o.effect is { Power: > 0 }) { }", "CS0117", "Power",
+            Assert.AreEqual("if (o.effect.Reference is { Power: > 0 }) { }", Fix("if (o.effect is { Power: > 0 }) { }", "CS0117", "Power",
                 "'StableRef<IEffect>' does not contain a definition for 'Power'"));
         }
 
         [Test]
         public void LocalizedMessage_IsRead()
         {
-            Assert.AreEqual("o.effect.Value.Apply();", Fix("o.effect.Apply();", "CS1061", "Apply",
+            Assert.AreEqual("o.effect.Reference.Apply();", Fix("o.effect.Apply();", "CS1061", "Apply",
                 "\"StableRef<IEffect>\" не содержит определения \"Apply\""));
         }
 
@@ -94,12 +94,12 @@ namespace SST.StableRef.Tests
         public void Patterns_FixTheSubject_NotThePattern()
         {
             const string pattern = "An expression of type 'StableRef<IEffect>' cannot be handled by a pattern of type 'Burn'.";
-            Assert.AreEqual("if (o.effect.Value is not Burn b) { }", Fix("if (o.effect is not Burn b) { }", "CS8121", "Burn", pattern));
-            Assert.AreEqual("if (o.effect.Value is Freeze or Burn) { }", Fix("if (o.effect is Freeze or Burn) { }", "CS8121", "Burn", pattern),
+            Assert.AreEqual("if (o.effect.Reference is not Burn b) { }", Fix("if (o.effect is not Burn b) { }", "CS8121", "Burn", pattern));
+            Assert.AreEqual("if (o.effect.Reference is Freeze or Burn) { }", Fix("if (o.effect is Freeze or Burn) { }", "CS8121", "Burn", pattern),
                 "a later pattern of an `or` finds the same subject");
-            Assert.AreEqual("switch (o.effect.Value) { case Freeze: break; case Burn x: break; }",
+            Assert.AreEqual("switch (o.effect.Reference) { case Freeze: break; case Burn x: break; }",
                 Fix("switch (o.effect) { case Freeze: break; case Burn x: break; }", "CS8121", "Burn", pattern));
-            Assert.AreEqual("int p = o.effect.Value switch { Freeze => 1, Burn => 2, _ => 0 };",
+            Assert.AreEqual("int p = o.effect.Reference switch { Freeze => 1, Burn => 2, _ => 0 };",
                 Fix("int p = o.effect switch { Freeze => 1, Burn => 2, _ => 0 };", "CS8121", "Burn", pattern));
         }
 
@@ -108,7 +108,7 @@ namespace SST.StableRef.Tests
         {
             const string convert = "Cannot implicitly convert type 'Burn' to 'SST.StableRef.StableRef<IEffect>'";
             Assert.AreEqual("if (f) o.effect.Set(new Burn());", Fix("if (f) o.effect = new Burn();", "CS0029", "new", convert));
-            Assert.AreEqual("o.effect.Value = f\n    ? new Burn()\n    : null;",
+            Assert.AreEqual("o.effect.Reference = f\n    ? new Burn()\n    : null;",
                 Fix("o.effect = f\n    ? new Burn()\n    : null;", "CS0029", "new", convert), "a value over several lines isn't wrapped");
             Assert.AreEqual("new Owner { effect = new(new Burn()) }", Fix("new Owner { effect = new Burn() }", "CS0029", "new Burn", convert));
             Assert.AreEqual("o.effects = new();", Fix("o.effects = new List<IEffect>();", "CS0029", "new",
@@ -122,7 +122,7 @@ namespace SST.StableRef.Tests
         [Test]
         public void CommentsAndStrings_AreNotCode_InterpolationHolesAre()
         {
-            Assert.AreEqual("var s = $\"{o.effect.Value.Power:D2}\"; // o.effect.Power",
+            Assert.AreEqual("var s = $\"{o.effect.Reference.Power:D2}\"; // o.effect.Power",
                 Fix("var s = $\"{o.effect.Power:D2}\"; // o.effect.Power", "CS1061", "Power",
                     "'StableRef<IEffect>' does not contain a definition for 'Power'"));
         }
@@ -157,7 +157,7 @@ namespace SST.StableRef.Tests
             string code = "class A { StableRef<IEffect> effect = new(); StableRefList<IEffect> effects = new();\n" +
                           "void M() { if (effect != null && null != this.effect && effect is not null && effect is { }) { } var t = effect.GetType(); effect = null; if (effects != null) { } } }";
             string expected = "class A { StableRef<IEffect> effect = new(); StableRefList<IEffect> effects = new();\n" +
-                              "void M() { if (effect.Value != null && null != this.effect.Value && effect.Value is not null && effect.Value is { }) { } var t = effect.Value.GetType(); effect.Value = null; if (effects != null) { } } }";
+                              "void M() { if (effect.Reference != null && null != this.effect.Reference && effect.Reference is not null && effect.Reference is { }) { } var t = effect.Reference.GetType(); effect.Reference = null; if (effects != null) { } } }";
             Assert.AreEqual(expected, Silent(code, Fields(own: true, unique: false), out var review));
             Assert.IsEmpty(review);
         }
@@ -168,7 +168,7 @@ namespace SST.StableRef.Tests
             string qualified = "class B { void M(A a) { if (a.effect != null) { } } }";
             Assert.AreEqual(qualified, Silent(qualified, Fields(own: false, unique: false), out var review));
             Assert.AreEqual(1, review.Count, "another member has the name");
-            Assert.AreEqual("class B { void M(A a) { if (a.effect.Value != null) { } } }",
+            Assert.AreEqual("class B { void M(A a) { if (a.effect.Reference != null) { } } }",
                 Silent(qualified, Fields(own: false, unique: true), out review));
 
             string otherFile = "class B { void M(IEffect effect) { if (effect != null) { } } }";
@@ -185,8 +185,8 @@ namespace SST.StableRef.Tests
                           "void Close() => Use(x => x.effect, effect is null); }";
             string expected = "class A { StableRef<IEffect> effect = new();\n" +
                               "void Init(IEffect effect) { if (effect != null) { } }\n" +
-                              "void Show() { if (effect.Value == null) { } foreach (var effect in list) { if (effect != null) { } } }\n" +
-                              "void Close() => Use(x => x.effect, effect.Value is null); }";
+                              "void Show() { if (effect.Reference == null) { } foreach (var effect in list) { if (effect != null) { } } }\n" +
+                              "void Close() => Use(x => x.effect, effect.Reference is null); }";
             Assert.AreEqual(expected, Silent(code, Fields(own: true, unique: false), out var review));
             Assert.IsEmpty(review, "a parameter or local of the same name is no field");
         }
@@ -198,8 +198,8 @@ namespace SST.StableRef.Tests
                           "var a = effect ?? o; bool b = effect == o; bool c = o != effect; int h = effect.GetHashCode();\n" +
                           "int d = effect switch { null => 0, _ => 1 }; switch (effect) { case null: break; } } }";
             string expected = "class A { StableRef<IEffect> effect = new(); void M(object o) {\n" +
-                              "var a = effect.Value ?? o; bool b = effect.Value == o; bool c = o != effect.Value; int h = effect.Value.GetHashCode();\n" +
-                              "int d = effect.Value switch { null => 0, _ => 1 }; switch (effect.Value) { case null: break; } } }";
+                              "var a = effect.Reference ?? o; bool b = effect.Reference == o; bool c = o != effect.Reference; int h = effect.Reference.GetHashCode();\n" +
+                              "int d = effect.Reference switch { null => 0, _ => 1 }; switch (effect.Reference) { case null: break; } } }";
             Assert.AreEqual(expected, Silent(code, Fields(own: true, unique: false), out _));
         }
 
@@ -220,7 +220,7 @@ namespace SST.StableRef.Tests
         public void ReceiverType_TellsTheField_FromAnotherOfTheSameName()
         {
             string code = Usings + "class C { void M(SrOwner a, SrOther b) { if (a.effect != null && b.effect != null) { } } }";
-            Assert.AreEqual(Usings + "class C { void M(SrOwner a, SrOther b) { if (a.effect.Value != null && b.effect != null) { } } }",
+            Assert.AreEqual(Usings + "class C { void M(SrOwner a, SrOther b) { if (a.effect.Reference != null && b.effect != null) { } } }",
                 Typed(code, out var review));
             Assert.IsEmpty(review, "b.effect is another type's field");
         }
@@ -236,12 +236,12 @@ namespace SST.StableRef.Tests
                           "if (h.Owner.Next().effect is null || list[0].effect != null || (h.Owner as SrOwner).effect == null) { }\n" +
                           "if (h.Find(out SrOwner found) && found.effect != null) { } } }";
             string expected = Usings + "class C { void M(SrHolder h, List<SrOwner> list) {\n" +
-                              "var x = h.Owner; if (x.effect.Value == null) { }\n" +
-                              "foreach (var o in h.owners) if (o.effect.Value is SrBurn) { }\n" +
-                              "bool any = list.Where(w => w.effect.Value != null).Skip(1).Any(v => v.effect.Value is null);\n" +
-                              "float sum = list.Aggregate(0f, (acc, s) => s.effect.Value == null ? acc : acc + 1);\n" +
-                              "if (h.Owner.Next().effect.Value is null || list[0].effect.Value != null || (h.Owner as SrOwner).effect.Value == null) { }\n" +
-                              "if (h.Find(out SrOwner found) && found.effect.Value != null) { } } }";
+                              "var x = h.Owner; if (x.effect.Reference == null) { }\n" +
+                              "foreach (var o in h.owners) if (o.effect.Reference is SrBurn) { }\n" +
+                              "bool any = list.Where(w => w.effect.Reference != null).Skip(1).Any(v => v.effect.Reference is null);\n" +
+                              "float sum = list.Aggregate(0f, (acc, s) => s.effect.Reference == null ? acc : acc + 1);\n" +
+                              "if (h.Owner.Next().effect.Reference is null || list[0].effect.Reference != null || (h.Owner as SrOwner).effect.Reference == null) { }\n" +
+                              "if (h.Find(out SrOwner found) && found.effect.Reference != null) { } } }";
             Assert.AreEqual(expected, Typed(code, out var review));
             Assert.IsEmpty(review);
         }
@@ -250,7 +250,7 @@ namespace SST.StableRef.Tests
         public void ReceiverType_IsReadFromTheEnclosingType_ThroughAGenericBase()
         {
             string code = Usings + "class SrProcessor : SrProcessorBase<SrOwner> { bool M() => Data.effect?.GetType() == this.Data.effect?.GetType(); }";
-            Assert.AreEqual(Usings + "class SrProcessor : SrProcessorBase<SrOwner> { bool M() => Data.effect.Value?.GetType() == this.Data.effect.Value?.GetType(); }",
+            Assert.AreEqual(Usings + "class SrProcessor : SrProcessorBase<SrOwner> { bool M() => Data.effect.Reference?.GetType() == this.Data.effect.Reference?.GetType(); }",
                 Typed(code, out _));
         }
 
@@ -258,7 +258,7 @@ namespace SST.StableRef.Tests
         public void Argument_GetsValue_UnlessTheParameterTakesTheWrapper()
         {
             string code = Usings + "class C { void M(SrOwner a) { SrSink.Take(a.effect); SrSink.Generic(a.effect); SrSink.Typed(a.effect); new SrBox(a.effect); Elsewhere.Call(a.effect); SrSink.Wrapper(a.effect); } }";
-            Assert.AreEqual(Usings + "class C { void M(SrOwner a) { SrSink.Take(a.effect.Value); SrSink.Generic(a.effect.Value); SrSink.Typed(a.effect.Value); new SrBox(a.effect.Value); Elsewhere.Call(a.effect.Value); SrSink.Wrapper(a.effect); } }",
+            Assert.AreEqual(Usings + "class C { void M(SrOwner a) { SrSink.Take(a.effect.Reference); SrSink.Generic(a.effect.Reference); SrSink.Typed(a.effect.Reference); new SrBox(a.effect.Reference); Elsewhere.Call(a.effect.Reference); SrSink.Wrapper(a.effect); } }",
                 Typed(code, out var review));
             Assert.IsEmpty(review, "a call whose parameter can't be read took the value before the retype");
         }
@@ -273,11 +273,11 @@ namespace SST.StableRef.Tests
                           "class SrOwner { [field: SerializeReference] public ISrEffect effect { get; private set; } }\n" +
                           "class SrOwner { public StableRef<effect> effect { get; } = new(); effect effect2; ISrEffect Get() => effect; ISrEffect Or(ISrEffect o) => o ?? effect; }";
             string expected = Usings + "class C { ISrEffect M(SrOwner a) {\n" +
-                              "a.effect.Value.Inject(c); var s = a.effect.Value?.State; ISrEffect e = a.effect.Value; var f = flag ? a.effect.Value : null;\n" +
+                              "a.effect.Reference.Inject(c); var s = a.effect.Reference?.State; ISrEffect e = a.effect.Reference; var f = flag ? a.effect.Reference : null;\n" +
                               "a.effect = new SrBurn(); a.effect.Set(e); var id = a.effect.TypeId; var n = nameof(a.effect);\n" +
-                              "Use(effect: a.effect.Value); return a.effect.Value; } }\n" +
+                              "Use(effect: a.effect.Reference); return a.effect.Reference; } }\n" +
                               "class SrOwner { [field: SerializeReference] public ISrEffect effect { get; private set; } }\n" +
-                              "class SrOwner { public StableRef<effect> effect { get; } = new(); effect effect2; ISrEffect Get() => effect.Value; ISrEffect Or(ISrEffect o) => o ?? effect.Value; }";
+                              "class SrOwner { public StableRef<effect> effect { get; } = new(); effect effect2; ISrEffect Get() => effect.Reference; ISrEffect Or(ISrEffect o) => o ?? effect.Reference; }";
             Assert.AreEqual(expected, Typed(code, out var review));
             Assert.IsEmpty(review);
         }
@@ -297,8 +297,8 @@ namespace SST.StableRef.Tests
                           "var (level, owner) = map.First(); if (owner.effect != null) { }\n" +
                           "foreach (var (i, o) in pairs) if (o.effect is null) { } } }";
             string expected = Usings + "class C { void M(Dictionary<int, SrOwner> map, List<(int, SrOwner)> pairs) {\n" +
-                              "var (level, owner) = map.First(); if (owner.effect.Value != null) { }\n" +
-                              "foreach (var (i, o) in pairs) if (o.effect.Value is null) { } } }";
+                              "var (level, owner) = map.First(); if (owner.effect.Reference != null) { }\n" +
+                              "foreach (var (i, o) in pairs) if (o.effect.Reference is null) { } } }";
             Assert.AreEqual(expected, Typed(code, out var review));
             Assert.IsEmpty(review);
         }
@@ -310,8 +310,8 @@ namespace SST.StableRef.Tests
                           "if (map[1].effect != null) { }\n" +
                           "return x switch { SrOwner so when so.effect is SrBurn => 1, SrOwner other => other.effect == null ? 2 : 3, _ => 0 }; } }";
             string expected = Usings + "class C { int M(Dictionary<int, SrOwner> map, object x) {\n" +
-                              "if (map[1].effect.Value != null) { }\n" +
-                              "return x switch { SrOwner so when so.effect.Value is SrBurn => 1, SrOwner other => other.effect.Value == null ? 2 : 3, _ => 0 }; } }";
+                              "if (map[1].effect.Reference != null) { }\n" +
+                              "return x switch { SrOwner so when so.effect.Reference is SrBurn => 1, SrOwner other => other.effect.Reference == null ? 2 : 3, _ => 0 }; } }";
             Assert.AreEqual(expected, Typed(code, out var review));
             Assert.IsEmpty(review);
         }
@@ -325,10 +325,10 @@ namespace SST.StableRef.Tests
                           "switch (a) { case { effect: null }: return 1; }\n" +
                           "return a switch { { effect: null } => 1, _ => 0 }; } }";
             string expected = Usings + "class C { int M(SrOwner a, SrOther b, SrHolder h, object x) {\n" +
-                              "if (a is { effect: { Value: null } } || a is not { effect: { Value: not null }, effect: { Value: SrBurn } } || x is SrOwner { effect: { Value: null } }) { }\n" +
-                              "if (h is { Owner: { effect: { Value: null } } } || b is { effect: null }) { }\n" +
-                              "switch (a) { case { effect: { Value: null } }: return 1; }\n" +
-                              "return a switch { { effect: { Value: null } } => 1, _ => 0 }; } }";
+                              "if (a is { effect: { Reference: null } } || a is not { effect: { Reference: not null }, effect: { Reference: SrBurn } } || x is SrOwner { effect: { Reference: null } }) { }\n" +
+                              "if (h is { Owner: { effect: { Reference: null } } } || b is { effect: null }) { }\n" +
+                              "switch (a) { case { effect: { Reference: null } }: return 1; }\n" +
+                              "return a switch { { effect: { Reference: null } } => 1, _ => 0 }; } }";
             Assert.AreEqual(expected, Typed(code, out var review));
             Assert.IsEmpty(review, "b is SrOther: its effect is another field");
         }
@@ -345,7 +345,7 @@ namespace SST.StableRef.Tests
         public void AnonymousTypeMember_KeepsTheFieldsName()
         {
             string code = Usings + "class C { void M(SrOwner a) { var x = new { a.effect, N = 1 }; var y = new[] { a.effect }; } }";
-            Assert.AreEqual(Usings + "class C { void M(SrOwner a) { var x = new { effect = a.effect.Value, N = 1 }; var y = new[] { a.effect.Value }; } }",
+            Assert.AreEqual(Usings + "class C { void M(SrOwner a) { var x = new { effect = a.effect.Reference, N = 1 }; var y = new[] { a.effect.Reference }; } }",
                 Typed(code, out _));
         }
 
@@ -353,16 +353,16 @@ namespace SST.StableRef.Tests
         public void LocalFromTheField_HoldsTheValue()
         {
             string code = Usings + "class C { void M(SrOwner a) { var r = a.effect; if (r == null || r.GetType() == null) { } } }";
-            Assert.AreEqual(Usings + "class C { void M(SrOwner a) { var r = a.effect.Value; if (r == null || r.GetType() == null) { } } }",
+            Assert.AreEqual(Usings + "class C { void M(SrOwner a) { var r = a.effect.Reference; if (r == null || r.GetType() == null) { } } }",
                 Typed(code, out _));
         }
 
         [Test]
-        public void SharedMember_Value_ReachesTheValue()
+        public void SharedMember_Reference_ReachesTheValue()
         {
-            string code = "class A { StableRef<Holder> effect = new(); int M() => effect.Value + effect.HasValue; }";
-            Assert.AreEqual("class A { StableRef<Holder> effect = new(); int M() => effect.Value.Value + effect.Value.HasValue; }",
-                Silent(code, Fields(own: true, unique: false, "Value", "HasValue"), out _));
+            string code = "class A { StableRef<Holder> effect = new(); int M() => effect.Reference + effect.HasValue; }";
+            Assert.AreEqual("class A { StableRef<Holder> effect = new(); int M() => effect.Reference.Reference + effect.Reference.HasValue; }",
+                Silent(code, Fields(own: true, unique: false, "Reference", "HasValue"), out _));
         }
     }
 

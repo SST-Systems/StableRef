@@ -49,7 +49,7 @@ namespace SST.StableRef.Tests
                     Ref = nestedRef
                 },
                 Direct = direct,
-                Inner = new StableRef<ITestThing> { Value = new BetaThing { B = 42 } }
+                Inner = new StableRef<ITestThing> { Reference = new BetaThing { B = 42 } }
             };
         }
 
@@ -82,7 +82,7 @@ namespace SST.StableRef.Tests
             Assert.IsTrue(StableRefEntry.TryRecreate(so.FindProperty("Ref")));
             so.ApplyModifiedProperties();
 
-            var alpha = holder.Ref.Value as AlphaThing;
+            var alpha = holder.Ref.Reference as AlphaThing;
             Assert.NotNull(alpha, "outer value recreated");
             Assert.AreEqual(7, alpha.Number);
             Assert.AreEqual(long.MaxValue, alpha.BigNumber);
@@ -99,13 +99,13 @@ namespace SST.StableRef.Tests
 
             Assert.AreEqual("stableref-tests.beta", alpha.Inner.TypeId,
                 "nested entry metadata restored by the outer snapshot");
-            Assert.IsNull(alpha.Inner.Value, "nested value needs its own fix pass");
+            Assert.IsNull(alpha.Inner.Reference, "nested value needs its own fix pass");
 
             int fixedCount = StableRefMissingTypesWindow.FixTarget(holder, out int unresolved);
             Assert.AreEqual(0, unresolved);
             Assert.GreaterOrEqual(fixedCount, 1);
 
-            var beta = (holder.Ref.Value as AlphaThing)?.Inner.Value as BetaThing;
+            var beta = (holder.Ref.Reference as AlphaThing)?.Inner.Reference as BetaThing;
             Assert.NotNull(beta, "nested StableRef recreated by fix pass");
             Assert.AreEqual(42, beta.B, "nested value data restored from its own snapshot");
         }
@@ -123,7 +123,7 @@ namespace SST.StableRef.Tests
             Assert.IsTrue(StableRefEntry.TryRecreate(so.FindProperty("Ref")));
             so.ApplyModifiedProperties();
 
-            var alpha = holder.Ref.Value as AlphaThing;
+            var alpha = holder.Ref.Reference as AlphaThing;
             Assert.NotNull(alpha);
             Assert.AreEqual(7, alpha.Number);
             Assert.AreEqual(TestKind.C, alpha.Kind, "legacy enum encoding is by enumValueIndex");
@@ -142,7 +142,7 @@ namespace SST.StableRef.Tests
             Assert.IsTrue(StableRefEntry.TryRecreate(so.FindProperty("Ref")));
             so.ApplyModifiedProperties();
 
-            var alpha = holder.Ref.Value as AlphaThing;
+            var alpha = holder.Ref.Reference as AlphaThing;
             Assert.NotNull(alpha);
             Assert.AreEqual(7, alpha.Number);
             Assert.AreEqual(TestKind.C, alpha.Kind, "v2 enum encoding is by underlying value");
@@ -183,7 +183,7 @@ namespace SST.StableRef.Tests
             so.ApplyModifiedProperties();
 
             so.Update();
-            Assert.IsNull(holder.Ref.Value);
+            Assert.IsNull(holder.Ref.Reference);
             Assert.AreEqual(string.Empty, so.FindProperty("Ref.TypeId").stringValue);
             Assert.AreEqual(string.Empty, so.FindProperty("Ref.TypeDisplayName").stringValue);
             Assert.AreEqual(string.Empty, so.FindProperty("Ref.ValuesData").stringValue);
@@ -239,7 +239,7 @@ namespace SST.StableRef.Tests
         public void TryGetParentArray_OnlyMatchesTheElementItself()
         {
             var holder = NewHolder();
-            holder.List.Add(new AlphaThing { Inner = new StableRef<ITestThing> { Value = new BetaThing() } });
+            holder.List.Add(new AlphaThing { Inner = new StableRef<ITestThing> { Reference = new BetaThing() } });
             var so = new SerializedObject(holder);
 
             var elementValue = so.FindProperty("List._items.Array.data[0].Value");
@@ -300,7 +300,7 @@ namespace SST.StableRef.Tests
                 Assert.IsTrue(StableRefEntry.TryRecreate(so.FindProperty("Ref")));
                 so.ApplyModifiedProperties();
 
-                Assert.AreEqual(1.25f, ((AlphaThing)holder.Ref.Value).Pos.x);
+                Assert.AreEqual(1.25f, ((AlphaThing)holder.Ref.Reference).Pos.x);
             }
             finally
             {

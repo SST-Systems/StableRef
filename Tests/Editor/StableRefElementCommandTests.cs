@@ -77,8 +77,8 @@ namespace SST.StableRef.Tests
         {
             var holder = NewHolder();
             holder.List.Add(new BetaThing());
-            holder.RawList.Add(new StableRef<ITestThing> { Value = new BetaThing() });
-            holder.Arr = new[] { new StableRef<ITestThing> { Value = new BetaThing() } };
+            holder.RawList.Add(new StableRef<ITestThing> { Reference = new BetaThing() });
+            holder.Arr = new[] { new StableRef<ITestThing> { Reference = new BetaThing() } };
             holder.PlainList.Add(new NoIdThing());
             var so = new SerializedObject(holder);
 
@@ -140,19 +140,19 @@ namespace SST.StableRef.Tests
         public void Duplicate_WorksInEveryListShape_AsDeepCopy()
         {
             var holder = NewHolder();
-            holder.RawList.Add(new StableRef<ITestThing> { Value = new BetaThing { B = 5 } });
-            holder.Arr = new[] { new StableRef<ITestThing> { Value = new BetaThing { B = 6 } } };
+            holder.RawList.Add(new StableRef<ITestThing> { Reference = new BetaThing { B = 5 } });
+            holder.Arr = new[] { new StableRef<ITestThing> { Reference = new BetaThing { B = 6 } } };
             holder.PlainList.Add(new NoIdThing { N = 7 });
 
             Menu("DuplicateValue", new SerializedObject(holder).FindProperty("RawList.Array.data[0].Value"));
             Menu("DuplicateValue", new SerializedObject(holder).FindProperty("Arr.Array.data[0].Value"));
             Menu("DuplicateValue", new SerializedObject(holder).FindProperty("PlainList.Array.data[0]"));
 
-            Assert.AreEqual(5, ((BetaThing)holder.RawList[1].Value).B);
-            Assert.AreNotSame(holder.RawList[0].Value, holder.RawList[1].Value);
+            Assert.AreEqual(5, ((BetaThing)holder.RawList[1].Reference).B);
+            Assert.AreNotSame(holder.RawList[0].Reference, holder.RawList[1].Reference);
             Assert.AreEqual("stableref-tests.beta", holder.RawList[1].TypeId);
-            Assert.AreEqual(6, ((BetaThing)holder.Arr[1].Value).B);
-            Assert.AreNotSame(holder.Arr[0].Value, holder.Arr[1].Value);
+            Assert.AreEqual(6, ((BetaThing)holder.Arr[1].Reference).B);
+            Assert.AreNotSame(holder.Arr[0].Reference, holder.Arr[1].Reference);
             Assert.AreEqual(7, ((NoIdThing)holder.PlainList[1]).N);
             Assert.AreNotSame(holder.PlainList[0], holder.PlainList[1],
                 "Unity's own Duplicate would share the managed reference");
@@ -256,8 +256,8 @@ namespace SST.StableRef.Tests
             broken.List.Add(new BetaThing());
             broken.List.Add(new BetaThing());
             SyncList(broken);
-            broken.List.Items[0].Value = null; // missing: stable id kept, value gone
-            broken.List.Items[2].Value = null;
+            broken.List.Items[0].Reference = null; // missing: stable id kept, value gone
+            broken.List.Items[2].Reference = null;
 
             var healthy = NewHolder();
             healthy.List.Add(new BetaThing());
@@ -275,17 +275,17 @@ namespace SST.StableRef.Tests
         public void SetNone_ClearsValueAndMetadata_OnEveryTarget()
         {
             var a = NewHolder();
-            a.Ref.Value = new AlphaThing { Number = 1 };
+            a.Ref.Reference = new AlphaThing { Number = 1 };
             SyncRef(a);
             var b = NewHolder();
-            b.Ref.Value = new BetaThing { B = 2 };
+            b.Ref.Reference = new BetaThing { B = 2 };
             SyncRef(b);
 
             Menu("SetNone", Shared(a, b).FindProperty("Ref.Value"));
 
             foreach (var holder in new[] { a, b })
             {
-                Assert.IsNull(holder.Ref.Value);
+                Assert.IsNull(holder.Ref.Reference);
                 Assert.IsTrue(string.IsNullOrEmpty(holder.Ref.TypeId));
                 Assert.IsTrue(string.IsNullOrEmpty(holder.Ref.ValuesData));
             }
@@ -318,9 +318,9 @@ namespace SST.StableRef.Tests
         public void IsMixed_WithWrapper_StampsEachTargetsOwnId()
         {
             var a = NewHolder();
-            a.Ref.Value = new AlphaThing();
+            a.Ref.Reference = new AlphaThing();
             var b = NewHolder();
-            b.Ref.Value = new BetaThing();
+            b.Ref.Reference = new BetaThing();
 
             Assert.IsTrue(StableRefMultiEdit.IsMixed(Shared(a, b).FindProperty("Ref.Value"), "Ref"));
             Assert.AreEqual("stableref-tests.alpha", a.Ref.TypeId);
@@ -345,9 +345,9 @@ namespace SST.StableRef.Tests
         public void MultiCapture_RecoversEachTargetWithItsOwnValues()
         {
             var a = NewHolder();
-            a.Ref.Value = new BetaThing { B = 111 };
+            a.Ref.Reference = new BetaThing { B = 111 };
             var b = NewHolder();
-            b.Ref.Value = new BetaThing { B = 222 };
+            b.Ref.Reference = new BetaThing { B = 222 };
             var shared = Shared(a, b);
 
             StableRefMultiEdit.IsMixed(shared.FindProperty("Ref.Value"), "Ref");
@@ -367,8 +367,8 @@ namespace SST.StableRef.Tests
                 so.ApplyModifiedProperties();
             }
 
-            Assert.AreEqual(111, ((BetaThing)a.Ref.Value).B);
-            Assert.AreEqual(222, ((BetaThing)b.Ref.Value).B);
+            Assert.AreEqual(111, ((BetaThing)a.Ref.Reference).B);
+            Assert.AreEqual(222, ((BetaThing)b.Ref.Reference).B);
         }
 
         private MissingHolder LoadMissingAsset(string fields, string references)
@@ -407,7 +407,7 @@ namespace SST.StableRef.Tests
             holder.List.Add(new BetaThing());
             holder.List.Add(new BetaThing());
             SyncList(holder);
-            holder.List.Items[0].Value = null; // a missing entry: stable id kept, value gone
+            holder.List.Items[0].Reference = null; // a missing entry: stable id kept, value gone
 
             var so = new SerializedObject(holder);
             var list = new UnityEditorInternal.ReorderableList(so, so.FindProperty("List._items"));

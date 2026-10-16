@@ -99,7 +99,7 @@ namespace SST.StableRef.Tests
             if (!AssetDatabase.IsValidFolder(TempFolder)) AssetDatabase.CreateFolder("Assets", "__StableRefScanTestsTemp");
 
             var holder = ScriptableObject.CreateInstance<TestHolder>();
-            holder.Ref.Value = new AlphaThing();
+            holder.Ref.Reference = new AlphaThing();
             string path = TempFolder + "/Pending.asset";
             AssetDatabase.CreateAsset(holder, path);
             AssetDatabase.SaveAssetIfDirty(holder);

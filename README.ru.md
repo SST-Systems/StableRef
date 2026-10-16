@@ -97,13 +97,13 @@ public class ItemConfig : ScriptableObject
 }
 
 if (config.OnPickup.HasValue)
-    config.OnPickup.Value.Apply();
+    config.OnPickup.Reference.Apply();
 
 config.OnPickup.Set(new DamageOnHit { Amount = 5 });
 config.OnPickup = new StableRef<IEffect>(new DamageOnHit { Amount = 5 });
 ```
 
-Лучше использовать `Set`, а не писать в `.Value` напрямую: он обновляет сохранённый ID, когда меняется тип значения. Неявных преобразований между `StableRef<T>` и `T` нет — используй `.Value` и конструктор.
+Лучше использовать `Set`, а не писать в `.Reference` напрямую: он обновляет сохранённый ID, когда меняется тип значения. Неявных преобразований между `StableRef<T>` и `T` нет — используй `.Reference` и конструктор.
 
 ### StableRefList\<T\>
 
@@ -187,7 +187,7 @@ public class EffectAuthoring : MonoBehaviour
 }
 ```
 
-Поле остаётся обычным `[SerializeReference]` (без `.Value`), а атрибут не попадает в player-билд. Удобно для authoring-кода ECS, для существующих полей, которые не хочется мигрировать, и для больших списков, где метаданные на каждый элемент не окупаются. Перенести существующие поля вместе с данными помогает семпл [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.ru.md).
+Поле остаётся обычным `[SerializeReference]` (без `.Reference`), а атрибут не попадает в player-билд. Удобно для authoring-кода ECS, для существующих полей, которые не хочется мигрировать, и для больших списков, где метаданные на каждый элемент не окупаются. Перенести существующие поля вместе с данными помогает семпл [SerializeReference Migration](Samples~/SerializeReferenceMigration/README.ru.md).
 
 > **На свой страх и риск.** У полей `[RefSelector]` **нет защиты от переименований**, и **Find Usages** / **Fix Missing Types** их не охватывают. Чтобы безопасно переименовать такой класс, добавь ему юнитевский `[MovedFrom]`.
 

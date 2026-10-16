@@ -97,19 +97,30 @@ namespace SST.StableRef
     /// a class nulls the field. <see cref="StableRef{T}"/> stores a stable <see cref="StableRefBase.TypeId"/>
     /// alongside the value and resolves the reference through it, so the data survives refactors.
     /// Declare it directly as a serialized field, e.g. <c>public StableRef&lt;IEffect&gt; OnPickup;</c>,
-    /// and read the value through <see cref="Value"/>. From code, assign with <see cref="Set"/> (or
+    /// and read the value through <see cref="Reference"/>. From code, assign with <see cref="Set"/> (or
     /// <c>field = new StableRef&lt;IEffect&gt;(v)</c>): it keeps the stable id when the value's type is unchanged and
-    /// drops it when the type changes. Writing <see cref="Value"/> directly leaves the metadata as it was.
+    /// drops it when the type changes. Writing <see cref="Reference"/> directly leaves the metadata as it was.
     /// </remarks>
     [Serializable]
     public sealed class StableRef<T> : StableRefBase where T : class
     {
+        // Serialized under the key "Value" in every asset — never rename (exposed as Reference).
+        [SerializeReference] private T Value;
+
         /// <summary>
         /// The wrapped polymorphic value. May be <see langword="null"/> if nothing is assigned or if the
         /// stored type can no longer be resolved (for example after a script file was deleted); check for
         /// <see langword="null"/> before use. Unresolved entries are surfaced by the Fix Missing Types tool.
         /// </summary>
-        [SerializeReference] public T Value;
+        /// <remarks>
+        /// Assigning it leaves the stable id and snapshot as they were; use <see cref="Set"/> to keep them consistent
+        /// with the value. In assets the value is still stored under the key <c>Value</c>.
+        /// </remarks>
+        public T Reference
+        {
+            get => Value;
+            set => Value = value;
+        }
 
         /// <summary>Creates an empty reference.</summary>
         [Preserve]
@@ -149,7 +160,7 @@ namespace SST.StableRef
         /// <summary>
         /// A new wrapper holding the same value instance, with the metadata copied (it describes that same value).
         /// Use it where an owner is cloned with <see cref="object.MemberwiseClone"/>: the clone otherwise shares
-        /// this wrapper, so assigning <see cref="Value"/> on the clone would change the original too.
+        /// this wrapper, so assigning <see cref="Reference"/> on the clone would change the original too.
         /// </summary>
         public StableRef<T> ShallowCopy() => new()
         {
